@@ -1,0 +1,6 @@
+[submodule "GD32C10x_Firmware_Library"]
+	path = GD32C10x_Firmware_Library
+	url = https://github.com/XmanAZC/GD32C10x_Firmware_Library.git
+[submodule "freeRTOS"]
+	path = freeRTOS
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git
