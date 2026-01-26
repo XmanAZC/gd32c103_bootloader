@@ -27,6 +27,7 @@ set(CMAKE_CXX_STANDARD 14)
 project(bootloader C CXX ASM)
 include_directories(
 	inc
+	xlink_generator
 	GD32C10x_Firmware_Library/CMSIS/GD/GD32C10x/Include
 	GD32C10x_Firmware_Library/CMSIS
 	GD32C10x_Firmware_Library/GD32C10x_standard_peripheral/Include
@@ -55,6 +56,7 @@ set(PROJECT_SOURCES
 	src/drv_simple_uart.c
 	src/freertos_mpool.c
 	src/ringbuffer.c
+	src/onchip_flash_port.c
 	GD32C10x_Firmware_Library/GD32C10x_standard_peripheral/Source/gd32c10x_dma.c
 	GD32C10x_Firmware_Library/CMSIS/GD/GD32C10x/Source/system_gd32c10x.c
 	GD32C10x_Firmware_Library/GD32C10x_standard_peripheral/Source/gd32c10x_usart.c
@@ -97,7 +99,7 @@ add_executable(bootloader.elf $<TARGET_OBJECTS:bootloader_objects>)
 set_target_properties(bootloader.elf PROPERTIES OUTPUT_NAME "bootloader.elf")
 target_link_options(bootloader.elf PRIVATE
     -Wl,--defsym,ROM_ORIGIN=0x08000000
-    -Wl,--defsym,ROM_LENGTH=20k
+    -Wl,--defsym,ROM_LENGTH=16k
 )
 add_custom_command(TARGET bootloader.elf POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O binary bootloader.elf bootloader.bin

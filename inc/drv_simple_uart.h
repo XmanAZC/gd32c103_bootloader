@@ -20,12 +20,18 @@ extern "C"
         struct dma_element *next, *prev;
     };
 
+    int uart_init(void);
+
     /**
      * @description: 获取 UART 句柄
      * @param {const char} *name，UART 设备名称
      * @return {void*} 返回 UART 句柄，失败返回 RT_NULL
      */
     void *gd32_uart_get_handle(const char *name);
+
+    struct dma_element * get_rx_block(void *handle);
+
+    void free_rx_block(void *handle, struct dma_element *element);
 
     /**
      * @description: 注册接收回调函数
@@ -36,13 +42,6 @@ extern "C"
      * @return {int} 返回结果，RT_EOK 成功，其他失败
      */
     int gd32_uart_set_rx_indicate(void *handle, int (*rx_ind)(size_t size, void *userdata), void *userdata);
-
-    /**
-     * @description: 获取 UART 接收环形缓冲区
-     * @param {void} *handle，UART 句柄
-     * @return {struct rt_ringbuffer*} 返回环形缓冲区句柄，失败返回 RT_NULL
-     */
-    struct ringbuffer *gd32_uart_get_rx_rb(void *handle);
 
     /**
      * @description: 通过 DMA 发送数据

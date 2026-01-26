@@ -24,14 +24,18 @@ struct gd32_uart
     uint32_t rx_port;
     uint16_t rx_pin;
     uint32_t baudrate;
-    struct ringbuffer *serial_rx_rb;
     struct dma_element *tx_dma_list;
+    struct dma_element *rx_block_list;
+    struct dma_element *current_rx_block;
     volatile uint32_t tx_dma_state; // 0:stop 1:running
     int (*rx_indicate)(size_t size, void *userdata);
     void *userdata;
 
     os_pool_p tx_dma_element_pool;
     os_pool_p tx_dma_data_pool;
+
+    os_pool_p rx_block_pool;
+    os_pool_p rx_data_pool;
 
     struct
     {
@@ -72,8 +76,9 @@ static struct gd32_uart uart_obj[] = {
         GPIOA,
         GPIO_PIN_10,        // rx port, rx pin
         BSP_UART0_BAUDRATE, // default baudrate
-        NULL,               // serial_rx_rb
         NULL,               // tx_dma_list
+        NULL,               // rx_block_list
+        NULL,               // current_rx_block
         0,                  // tx_dma_state
         NULL,               // rx_indicate
         NULL,               // userdata
@@ -94,8 +99,9 @@ static struct gd32_uart uart_obj[] = {
         GPIOA,
         GPIO_PIN_3,         // rx port, rx pin
         BSP_UART1_BAUDRATE, // default baudrate
-        NULL,               // serial_rx_rb
         NULL,               // tx_dma_list
+        NULL,               // rx_block_list
+        NULL,               // current_rx_block
         0,                  // tx_dma_state
         NULL,               // rx_indicate
         NULL,               // userdata
@@ -125,8 +131,9 @@ static struct gd32_uart uart_obj[] = {
         GPIO_PIN_11, // rx port, rx pin
 #endif
         BSP_UART2_BAUDRATE, // default baudrate
-        NULL,               // serial_rx_rb
         NULL,               // tx_dma_list
+        NULL,               // rx_block_list
+        NULL,               // current_rx_block
         0,                  // tx_dma_state
         NULL,               // rx_indicate
         NULL,               // userdata
@@ -147,8 +154,9 @@ static struct gd32_uart uart_obj[] = {
         GPIOC,
         GPIO_PIN_11,        // rx port, rx pin
         BSP_UART3_BAUDRATE, // default baudrate
-        NULL,               // serial_rx_rb
         NULL,               // tx_dma_list
+        NULL,               // rx_block_list
+        NULL,               // current_rx_block
         0,                  // tx_dma_state
         NULL,               // rx_indicate
         NULL,               // userdata
@@ -157,6 +165,8 @@ static struct gd32_uart uart_obj[] = {
     },
 #endif
 };
+
+static void _gd32_dma_receive(struct gd32_uart *uart, uint8_t *buffer, uint32_t size);
 
 static inline size_t gd32_uart_buf_size(const struct gd32_uart *uart)
 {
@@ -247,29 +257,70 @@ static inline void _uart_dma_transmit(struct gd32_uart *uart, const uint8_t *buf
 
 static void dma_recv_isr(struct gd32_uart *uart)
 {
-    size_t recv_len, counter;
-
-    recv_len = 0;
+    size_t counter;
     counter = dma_transfer_number_get(uart->dma.rx.periph, uart->dma.rx.channel);
-
-    if (counter <= uart->dma.last_index)
+    uart->current_rx_block->size = gd32_uart_buf_size(uart) - counter;
+    DL_APPEND(uart->rx_block_list, uart->current_rx_block);
+    if (uart->rx_indicate)
     {
-        recv_len = uart->dma.last_index - counter;
+        uart->rx_indicate(uart->rx_block_list->size, uart->userdata);
+    }
+_back:
+    uart->current_rx_block = osPoolAlloc(uart->rx_block_pool);
+    if (uart->current_rx_block)
+    {
+        uart->current_rx_block->prev = uart->current_rx_block->next = NULL;
+        uart->current_rx_block->buffer = osPoolAlloc(uart->rx_data_pool);
+        if (!uart->current_rx_block->buffer)
+        {
+            osPoolFree(uart->rx_block_pool, uart->current_rx_block);
+            uart->current_rx_block = NULL;
+            return;
+        }
+        else
+        {
+            _gd32_dma_receive(uart,
+                              uart->current_rx_block->buffer,
+                              gd32_uart_buf_size(uart));
+        }
     }
     else
     {
-        recv_len = uart->serial_rx_rb->buffer_size + uart->dma.last_index - counter;
-    }
-
-    if (recv_len)
-    {
-        uart->dma.last_index = counter;
-        serial_update_write_index(uart->serial_rx_rb, recv_len);
-        if (uart->rx_indicate)
+        /* no memory */
+        /* free list head */
+        struct dma_element *node = uart->rx_block_list;
+        if (node)
         {
-            uart->rx_indicate(recv_len, uart->userdata);
+            DL_DELETE(uart->rx_block_list, node);
+            osPoolFree(uart->rx_data_pool, node->buffer);
+            osPoolFree(uart->rx_block_pool, node);
         }
+        goto _back;
     }
+}
+
+struct dma_element *get_rx_block(void *handle)
+{
+    struct gd32_uart *uart = (struct gd32_uart *)handle;
+    taskENTER_CRITICAL();
+    struct dma_element *node = uart->rx_block_list;
+    if (node)
+    {
+        DL_DELETE(uart->rx_block_list, node);
+        taskEXIT_CRITICAL();
+        return node;
+    }
+    taskEXIT_CRITICAL();
+    return NULL;
+}
+
+void free_rx_block(void *handle, struct dma_element *element)
+{
+    struct gd32_uart *uart = (struct gd32_uart *)handle;
+    taskENTER_CRITICAL();
+    osPoolFree(uart->rx_data_pool, element->buffer);
+    osPoolFree(uart->rx_block_pool, element);
+    taskEXIT_CRITICAL();
 }
 
 static void gd32_uart_isr(struct gd32_uart *uart)
@@ -278,7 +329,13 @@ static void gd32_uart_isr(struct gd32_uart *uart)
     if (usart_interrupt_flag_get(uart->periph, USART_INT_FLAG_IDLE) != RESET)
     {
         volatile uint8_t data = (uint8_t)usart_data_receive(uart->periph);
-
+        /* clear all the interrupt flags */
+        dma_flag_clear(uart->dma.rx.periph, uart->dma.rx.channel, DMA_FLAG_G);
+        dma_flag_clear(uart->dma.rx.periph, uart->dma.rx.channel, DMA_FLAG_ERR);
+        dma_flag_clear(uart->dma.rx.periph, uart->dma.rx.channel, DMA_FLAG_HTF);
+        dma_flag_clear(uart->dma.rx.periph, uart->dma.rx.channel, DMA_FLAG_FTF);
+        dma_channel_disable(uart->dma.rx.periph, uart->dma.rx.channel);
+        dma_deinit(uart->dma.rx.periph, uart->dma.rx.channel);
         dma_recv_isr(uart);
 
         usart_interrupt_flag_clear(uart->periph, USART_INT_FLAG_IDLE);
@@ -431,16 +488,8 @@ void DMA1_Channel4_IRQHandler(void)
 
 static void _gd32_dma_receive(struct gd32_uart *uart, uint8_t *buffer, uint32_t size)
 {
-    dma_parameter_struct dma_init_struct;
+    static dma_parameter_struct dma_init_struct;
     dma_struct_para_init(&dma_init_struct);
-
-    /* clear all the interrupt flags */
-    dma_flag_clear(uart->dma.rx.periph, uart->dma.rx.channel, DMA_FLAG_G);
-    dma_flag_clear(uart->dma.rx.periph, uart->dma.rx.channel, DMA_FLAG_ERR);
-    dma_flag_clear(uart->dma.rx.periph, uart->dma.rx.channel, DMA_FLAG_HTF);
-    dma_flag_clear(uart->dma.rx.periph, uart->dma.rx.channel, DMA_FLAG_FTF);
-    dma_channel_disable(uart->dma.rx.periph, uart->dma.rx.channel);
-    dma_deinit(uart->dma.rx.periph, uart->dma.rx.channel);
 
     /* configure receive DMA */
     rcu_periph_clock_enable(uart->dma.rx.rcu);
@@ -499,7 +548,32 @@ static void gd32_dma_config(struct gd32_uart *uart)
     /* enable transmit complete interrupt */
     dma_interrupt_enable(uart->dma.tx.periph, uart->dma.tx.channel, DMA_CHXCTL_FTFIE);
 
-    _gd32_dma_receive(uart, uart->serial_rx_rb->buffer_ptr, uart->serial_rx_rb->buffer_size);
+    /* clear all the interrupt flags */
+    dma_flag_clear(uart->dma.rx.periph, uart->dma.rx.channel, DMA_FLAG_G);
+    dma_flag_clear(uart->dma.rx.periph, uart->dma.rx.channel, DMA_FLAG_ERR);
+    dma_flag_clear(uart->dma.rx.periph, uart->dma.rx.channel, DMA_FLAG_HTF);
+    dma_flag_clear(uart->dma.rx.periph, uart->dma.rx.channel, DMA_FLAG_FTF);
+    dma_channel_disable(uart->dma.rx.periph, uart->dma.rx.channel);
+    dma_deinit(uart->dma.rx.periph, uart->dma.rx.channel);
+
+    uart->current_rx_block = osPoolAlloc(uart->rx_block_pool);
+    if (uart->current_rx_block)
+    {
+        uart->current_rx_block->prev = uart->current_rx_block->next = NULL;
+        uart->current_rx_block->buffer = osPoolAlloc(uart->rx_data_pool);
+        if (!uart->current_rx_block->buffer)
+        {
+            osPoolFree(uart->rx_block_pool, uart->current_rx_block);
+            uart->current_rx_block = NULL;
+            return;
+        }
+        else
+        {
+            _gd32_dma_receive(uart,
+                              uart->current_rx_block->buffer,
+                              gd32_uart_buf_size(uart));
+        }
+    }
 }
 
 static void inline gd32_uart_init(struct gd32_uart *uart)
@@ -525,7 +599,6 @@ static void inline gd32_uart_init(struct gd32_uart *uart)
     usart_transmit_config(uart->periph, USART_TRANSMIT_ENABLE);
     usart_enable(uart->periph);
 
-    uart->serial_rx_rb = ringbuffer_create(gd32_uart_buf_size(uart));
     gd32_dma_config(uart);
 }
 
@@ -540,23 +613,42 @@ void gd32_uart_set_baudrate(void *handle, uint32_t baudrate)
     usart_baudrate_set(uart->periph, uart->baudrate);
 }
 
-static int uart_init(void)
+int uart_init(void)
 {
     int i;
     for (i = 0; i < sizeof(uart_obj) / sizeof(uart_obj[0]); i++)
     {
         uart_obj[i].tx_dma_element_pool = osPoolInit(NULL,
                                                      NULL,
-                                                     TX_DMA_DATA_MAX_CNT + 1,
+                                                     TX_DMA_DATA_MAX_CNT,
                                                      sizeof(struct dma_element));
         uart_obj[i].tx_dma_data_pool = osPoolInit(NULL,
                                                   NULL,
                                                   TX_DMA_DATA_MAX_CNT,
                                                   TX_DMA_DATA_MAX_SIZE);
+
+        uart_obj[i].rx_block_pool = osPoolInit(NULL,
+                                               NULL,
+                                               TX_DMA_DATA_MAX_CNT,
+                                               sizeof(struct dma_element));
+        uart_obj[i].rx_data_pool = osPoolInit(NULL,
+                                              NULL,
+                                              TX_DMA_DATA_MAX_CNT,
+                                              gd32_uart_buf_size(&uart_obj[i]));
         gd32_uart_init(&uart_obj[i]);
     }
 
     return 0;
+}
+
+static int simple_strcmp(const char *s1, const char *s2)
+{
+    while (*s1 && (*s1 == *s2))
+    {
+        s1++;
+        s2++;
+    }
+    return *(unsigned char *)s1 - *(unsigned char *)s2;
 }
 
 void *gd32_uart_get_handle(const char *name)
@@ -565,7 +657,7 @@ void *gd32_uart_get_handle(const char *name)
 
     for (i = 0; i < sizeof(uart_obj) / sizeof(uart_obj[0]); i++)
     {
-        if (strcmp(uart_obj[i].device_name, name) == 0)
+        if (simple_strcmp(uart_obj[i].device_name, name) == 0)
         {
             return &uart_obj[i];
         }
@@ -585,16 +677,6 @@ int gd32_uart_set_rx_indicate(void *handle, int (*rx_ind)(size_t size, void *use
     uart->userdata = userdata;
 
     return 0;
-}
-
-struct ringbuffer *gd32_uart_get_rx_rb(void *handle)
-{
-    struct gd32_uart *uart = (struct gd32_uart *)handle;
-
-    if (uart == NULL)
-        return NULL;
-
-    return uart->serial_rx_rb;
 }
 
 int gd32_uart_dma_send(void *handle, const uint8_t *buf, size_t size)
