@@ -4,9 +4,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "config.h"
-#include <gd32c10x.h>
+#include "gd32c10x.h"
 #include "drv_dma.h"
-#include "ringbuffer.h"
 
 #ifdef __cplusplus
 extern "C"

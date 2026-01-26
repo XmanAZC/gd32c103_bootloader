@@ -185,7 +185,7 @@ static inline int check_app_valid(enum ActiveApp app)
 }
 
 #ifdef SOC_GD32C103CBT6
-#include <gd32c10x.h>
+#include "gd32c10x.h"
 
 static inline void jump_to_app(enum ActiveApp app)
 {

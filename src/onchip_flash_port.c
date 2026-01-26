@@ -1,6 +1,6 @@
 #include "onchip_flash_port.h"
 #include "config.h"
-#include <gd32c10x.h>
+#include "gd32c10x.h"
 
 #if defined(SOC_SERIES_GD32C11x) || defined(SOC_SERIES_GD32C10x)
 static const uint32_t FMC_FLAGS = FMC_FLAG_END | FMC_FLAG_WPERR | FMC_FLAG_PGAERR | FMC_FLAG_PGERR;

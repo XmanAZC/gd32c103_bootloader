@@ -28,16 +28,6 @@ project(bootloader C CXX ASM)
 include_directories(
 	inc
 	xlink_generator
-	GD32C10x_Firmware_Library/CMSIS/GD/GD32C10x/Include
-	GD32C10x_Firmware_Library/CMSIS
-	GD32C10x_Firmware_Library/GD32C10x_standard_peripheral/Include
-	freeRTOS/include
-	freeRTOS/portable/GCC/ARM_CM4F
-)
-
-add_definitions(
-	-DUSE_STDPERIPH_DRIVER
-	-D_POSIX_C_SOURCE=1
 )
 
 if(DEFINED ENV{DEBUG})
@@ -50,26 +40,26 @@ else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2")
 endif()
 
-set(PROJECT_SOURCES
+set(BOOTLOADER_SOURCES
+	src/boot_loader_main.c
+	src/syscall.c
+	src/drv_simple_uart.c
+	src/freertos_mpool.c
+	src/onchip_flash_port.c
+)
+
+set(APP_SOURCES
 	src/main.c
 	src/syscall.c
 	src/drv_simple_uart.c
 	src/freertos_mpool.c
-	src/ringbuffer.c
 	src/onchip_flash_port.c
-	GD32C10x_Firmware_Library/GD32C10x_standard_peripheral/Source/gd32c10x_dma.c
-	GD32C10x_Firmware_Library/CMSIS/GD/GD32C10x/Source/system_gd32c10x.c
-	GD32C10x_Firmware_Library/GD32C10x_standard_peripheral/Source/gd32c10x_usart.c
-	GD32C10x_Firmware_Library/CMSIS/GD/GD32C10x/Source/GCC/startup_gd32c10x.s
-	GD32C10x_Firmware_Library/GD32C10x_standard_peripheral/Source/gd32c10x_rcu.c
-	GD32C10x_Firmware_Library/GD32C10x_standard_peripheral/Source/gd32c10x_gpio.c
-	GD32C10x_Firmware_Library/GD32C10x_standard_peripheral/Source/gd32c10x_fmc.c
-	GD32C10x_Firmware_Library/GD32C10x_standard_peripheral/Source/gd32c10x_misc.c
 )
 
 set(FREERTOS_PORT GCC_ARM_CM4F CACHE STRING "FreeRTOS port to use")
 set(FREERTOS_HEAP 4 CACHE STRING "FreeRTOS heap implementation to use")
 
+add_subdirectory(GD32C10x_Firmware_Library INTERFACE)
 add_library(freertos_config INTERFACE)
 
 target_include_directories(freertos_config SYSTEM
@@ -91,9 +81,10 @@ link_libraries(
 	m
 	freertos_kernel
 	freertos_config
+	gd32c103
 )
 
-add_library(bootloader_objects OBJECT ${PROJECT_SOURCES})
+add_library(bootloader_objects OBJECT ${BOOTLOADER_SOURCES})
 
 add_executable(bootloader.elf $<TARGET_OBJECTS:bootloader_objects>)
 set_target_properties(bootloader.elf PROPERTIES OUTPUT_NAME "bootloader.elf")
@@ -104,4 +95,27 @@ target_link_options(bootloader.elf PRIVATE
 add_custom_command(TARGET bootloader.elf POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O binary bootloader.elf bootloader.bin
     COMMAND ${CMAKE_SIZE} bootloader.elf
+)
+
+add_library(app_objects OBJECT ${APP_SOURCES})
+
+add_executable(appa.elf $<TARGET_OBJECTS:app_objects>)
+set_target_properties(appa.elf PROPERTIES OUTPUT_NAME "appa.elf")
+target_link_options(appa.elf PRIVATE
+    -Wl,--defsym,ROM_ORIGIN=0x08005000
+    -Wl,--defsym,ROM_LENGTH=48k
+)
+add_custom_command(TARGET appa.elf POST_BUILD
+    COMMAND ${CMAKE_OBJCOPY} -O binary appa.elf appa.bin
+    COMMAND ${CMAKE_SIZE} appa.elf
+)
+add_executable(appb.elf $<TARGET_OBJECTS:app_objects>)
+set_target_properties(appb.elf PROPERTIES OUTPUT_NAME "appb.elf")
+target_link_options(appb.elf PRIVATE
+    -Wl,--defsym,ROM_ORIGIN=0x08011800
+    -Wl,--defsym,ROM_LENGTH=48k
+)
+add_custom_command(TARGET appb.elf POST_BUILD
+    COMMAND ${CMAKE_OBJCOPY} -O binary appb.elf appb.bin
+    COMMAND ${CMAKE_SIZE} appb.elf
 )

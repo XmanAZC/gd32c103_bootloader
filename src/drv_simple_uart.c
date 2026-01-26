@@ -1,7 +1,6 @@
 #include "drv_simple_uart.h"
 #include <utlist.h>
 #include <FreeRTOS.h>
-#include "ringbuffer.h"
 #include "freertos_mpool.h"
 #include <semphr.h>
 #include <string.h>
@@ -187,55 +186,6 @@ static inline size_t gd32_uart_buf_size(const struct gd32_uart *uart)
         return BSP_UART3_RX_BUFSIZE;
 #endif
     return 512;
-}
-
-static size_t serial_update_read_index(struct ringbuffer *rb,
-                                       uint16_t read_index)
-{
-    size_t size;
-
-    /* whether has enough data  */
-    size = ringbuffer_data_len(rb);
-
-    /* no data */
-    if (size == 0)
-        return 0;
-
-    /* less data */
-    if (size < read_index)
-        read_index = size;
-
-    if (rb->buffer_size - rb->read_index > read_index)
-    {
-        rb->read_index += read_index;
-        return read_index;
-    }
-
-    read_index = rb->buffer_size - rb->read_index;
-
-    /* we are going into the other side of the mirror */
-    rb->read_mirror = ~rb->read_mirror;
-    rb->read_index = 0;
-
-    return read_index;
-}
-
-static size_t serial_update_write_index(struct ringbuffer *rb,
-                                        uint16_t write_size)
-{
-    if (rb->buffer_size - rb->write_index > write_size)
-    {
-        /* this should not cause overflow because there is enough space for
-         * length of data in current mirror */
-        rb->write_index += write_size;
-        return write_size;
-    }
-
-    /* we are going into the other side of the mirror */
-    rb->write_mirror = ~rb->write_mirror;
-    rb->write_index = write_size - (rb->buffer_size - rb->write_index);
-
-    return write_size;
 }
 
 static inline void _uart_dma_transmit(struct gd32_uart *uart, const uint8_t *buffer, uint32_t size)

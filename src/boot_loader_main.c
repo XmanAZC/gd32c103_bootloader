@@ -229,6 +229,9 @@ static void exampleTask(void *parameters)
 
     /* Unused parameters. */
     (void)parameters;
+    BootFromInfo_p boot_from_info = (BootFromInfo_p)PARTITION_ADDRESS_BOOTFROM;
+    jump_to_app(boot_from_info->activeApp);
+    jump_to_app(!boot_from_info->activeApp);
     rcu_periph_clock_enable(RCU_GPIOB);
     gpio_bit_set(GPIOB, GPIO_PIN_7); // Set PB7 high
     gpio_init(GPIOB, GPIO_MODE_OUT_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_7);
