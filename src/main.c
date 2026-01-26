@@ -59,7 +59,7 @@ static void exampleTask(void *parameters)
         {
             gpio_bit_reset(GPIOB, GPIO_PIN_7); // Turn LED off
         }
-        vTaskDelay(500); /* delay 500 ticks */
+        vTaskDelay(pdMS_TO_TICKS(500)); /* delay 500 ms */
     }
 }
 
