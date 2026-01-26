@@ -49,3 +49,4 @@ tags
 cmake-build-debug
 *.mk
 release/*
+app_padding
