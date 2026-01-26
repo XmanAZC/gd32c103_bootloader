@@ -15,8 +15,6 @@ void entry(void)
     static StaticTask_t exampleTaskTCB;
     static StackType_t exampleTaskStack[configMINIMAL_STACK_SIZE];
 
-    // SysTick_Config(SystemCoreClock / configTICK_RATE_HZ);
-
     (void)xTaskCreateStatic(exampleTask,
                             "example",
                             configMINIMAL_STACK_SIZE,
@@ -29,9 +27,7 @@ void entry(void)
     vTaskStartScheduler();
 
     for (;;)
-    {
-        /* Should not reach here. */
-    }
+        ;
 
     return;
 }
@@ -59,7 +55,7 @@ static void exampleTask(void *parameters)
         {
             gpio_bit_reset(GPIOB, GPIO_PIN_7); // Turn LED off
         }
-        vTaskDelay(pdMS_TO_TICKS(500)); /* delay 500 ms */
+        vTaskDelay(pdMS_TO_TICKS(100)); /* delay 100 ms */
     }
 }
 

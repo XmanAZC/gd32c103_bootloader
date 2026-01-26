@@ -1,5 +1,10 @@
 #include "drv_simple_uart.h"
 #include <utlist.h>
+#include <FreeRTOS.h>
+#include "ringbuffer.h"
+#include "freertos_mpool.h"
+#include <semphr.h>
+#include <string.h>
 
 #ifdef BSP_USING_SIMPLE_UART
 
@@ -25,15 +30,15 @@ struct gd32_uart
     int (*rx_indicate)(size_t size, void *userdata);
     void *userdata;
 
-    mp_t tx_dma_element_pool;
-    mp_t tx_dma_data_pool;
+    os_pool_p tx_dma_element_pool;
+    os_pool_p tx_dma_data_pool;
 
     struct
     {
         struct dma_config rx;
         struct dma_config tx;
         size_t last_index;
-        sem_t sem_ftf;
+        SemaphoreHandle_t sem_ftf;
     } dma;
 };
 
@@ -53,7 +58,7 @@ enum
 #endif
 };
 
-static struct gd32_uart uaobj[] = {
+static struct gd32_uart uart_obj[] = {
 #ifdef BSP_USING_UART0
     {
         "uart0",
@@ -153,22 +158,22 @@ static struct gd32_uart uaobj[] = {
 #endif
 };
 
-static size_t gd32_uarx_buf_size(const struct gd32_uart *uart)
+static inline size_t gd32_uart_buf_size(const struct gd32_uart *uart)
 {
 #ifdef BSP_USING_UART0
-    if (uart == &uaobj[UART0_INDEX])
+    if (uart == &uart_obj[UART0_INDEX])
         return BSP_UART0_RX_BUFSIZE;
 #endif
 #ifdef BSP_USING_UART1
-    if (uart == &uaobj[UART1_INDEX])
+    if (uart == &uart_obj[UART1_INDEX])
         return BSP_UART1_RX_BUFSIZE;
 #endif
 #ifdef BSP_USING_UART2
-    if (uart == &uaobj[UART2_INDEX])
+    if (uart == &uart_obj[UART2_INDEX])
         return BSP_UART2_RX_BUFSIZE;
 #endif
 #ifdef BSP_USING_UART3
-    if (uart == &uaobj[UART3_INDEX])
+    if (uart == &uart_obj[UART3_INDEX])
         return BSP_UART3_RX_BUFSIZE;
 #endif
     return 512;
@@ -223,7 +228,7 @@ static size_t serial_update_write_index(struct ringbuffer *rb,
     return write_size;
 }
 
-static inline void _uadma_transmit(struct gd32_uart *uart, const uint8_t *buffer, uint32_t size)
+static inline void _uart_dma_transmit(struct gd32_uart *uart, const uint8_t *buffer, uint32_t size)
 {
     /* Set the data length and data pointer */
     DMA_CHMADDR(uart->dma.tx.periph, uart->dma.tx.channel) = (uint32_t)buffer;
@@ -231,9 +236,9 @@ static inline void _uadma_transmit(struct gd32_uart *uart, const uint8_t *buffer
 
     /* enable dma transmit */
 #if defined(SOC_SERIES_GD32F30x) || defined(SOC_SERIES_GD32F10x)
-    usadma_transmit_config(uart->periph, USART_DENT_ENABLE);
+    usart_dma_transmit_config(uart->periph, USART_DENT_ENABLE);
 #else
-    usadma_transmit_config(uart->periph, USART_TRANSMIT_DMA_ENABLE);
+    usart_dma_transmit_config(uart->periph, USART_TRANSMIT_DMA_ENABLE);
 #endif
 
     /* enable dma channel */
@@ -267,62 +272,62 @@ static void dma_recv_isr(struct gd32_uart *uart)
     }
 }
 
-static void usaisr(struct gd32_uart *uart)
+static void gd32_uart_isr(struct gd32_uart *uart)
 {
 
-    if (usainterrupt_flag_get(uart->periph, USART_INT_FLAG_IDLE) != RESET)
+    if (usart_interrupt_flag_get(uart->periph, USART_INT_FLAG_IDLE) != RESET)
     {
-        volatile uint8_t data = (uint8_t)usadata_receive(uart->periph);
+        volatile uint8_t data = (uint8_t)usart_data_receive(uart->periph);
 
         dma_recv_isr(uart);
 
-        usainterrupt_flag_clear(uart->periph, USART_INT_FLAG_IDLE);
+        usart_interrupt_flag_clear(uart->periph, USART_INT_FLAG_IDLE);
     }
     else
     {
-        if (usainterrupt_flag_get(uart->periph, USART_INT_FLAG_ERR_ORERR) != RESET)
+        if (usart_interrupt_flag_get(uart->periph, USART_INT_FLAG_ERR_ORERR) != RESET)
         {
-            usainterrupt_flag_clear(uart->periph, USART_INT_FLAG_ERR_ORERR);
+            usart_interrupt_flag_clear(uart->periph, USART_INT_FLAG_ERR_ORERR);
         }
 
-        if (usainterrupt_flag_get(uart->periph, USART_INT_FLAG_ERR_NERR) != RESET)
+        if (usart_interrupt_flag_get(uart->periph, USART_INT_FLAG_ERR_NERR) != RESET)
         {
-            usainterrupt_flag_clear(uart->periph, USART_INT_FLAG_ERR_NERR);
+            usart_interrupt_flag_clear(uart->periph, USART_INT_FLAG_ERR_NERR);
         }
 
-        if (usainterrupt_flag_get(uart->periph, USART_INT_FLAG_ERR_FERR) != RESET)
+        if (usart_interrupt_flag_get(uart->periph, USART_INT_FLAG_ERR_FERR) != RESET)
         {
-            usainterrupt_flag_clear(uart->periph, USART_INT_FLAG_ERR_FERR);
+            usart_interrupt_flag_clear(uart->periph, USART_INT_FLAG_ERR_FERR);
         }
 
-        if (usainterrupt_flag_get(uart->periph, USART_INT_FLAG_RBNE_ORERR) != RESET)
+        if (usart_interrupt_flag_get(uart->periph, USART_INT_FLAG_RBNE_ORERR) != RESET)
         {
-            usainterrupt_flag_clear(uart->periph, USART_INT_FLAG_RBNE_ORERR);
+            usart_interrupt_flag_clear(uart->periph, USART_INT_FLAG_RBNE_ORERR);
         }
 
-        if (usainterrupt_flag_get(uart->periph, USART_INT_FLAG_PERR) != RESET)
+        if (usart_interrupt_flag_get(uart->periph, USART_INT_FLAG_PERR) != RESET)
         {
-            usainterrupt_flag_clear(uart->periph, USART_INT_FLAG_PERR);
+            usart_interrupt_flag_clear(uart->periph, USART_INT_FLAG_PERR);
         }
 
-        if (usainterrupt_flag_get(uart->periph, USART_INT_FLAG_CTS) != RESET)
+        if (usart_interrupt_flag_get(uart->periph, USART_INT_FLAG_CTS) != RESET)
         {
-            usainterrupt_flag_clear(uart->periph, USART_INT_FLAG_CTS);
+            usart_interrupt_flag_clear(uart->periph, USART_INT_FLAG_CTS);
         }
 
-        if (usainterrupt_flag_get(uart->periph, USART_INT_FLAG_LBD) != RESET)
+        if (usart_interrupt_flag_get(uart->periph, USART_INT_FLAG_LBD) != RESET)
         {
-            usainterrupt_flag_clear(uart->periph, USART_INT_FLAG_LBD);
+            usart_interrupt_flag_clear(uart->periph, USART_INT_FLAG_LBD);
         }
 
-        if (usainterrupt_flag_get(uart->periph, USART_INT_FLAG_EB) != RESET)
+        if (usart_interrupt_flag_get(uart->periph, USART_INT_FLAG_EB) != RESET)
         {
-            usainterrupt_flag_clear(uart->periph, USART_INT_FLAG_EB);
+            usart_interrupt_flag_clear(uart->periph, USART_INT_FLAG_EB);
         }
 
-        if (usainterrupt_flag_get(uart->periph, USART_INT_FLAG_RT) != RESET)
+        if (usart_interrupt_flag_get(uart->periph, USART_INT_FLAG_RT) != RESET)
         {
-            usainterrupt_flag_clear(uart->periph, USART_INT_FLAG_RT);
+            usart_interrupt_flag_clear(uart->periph, USART_INT_FLAG_RT);
         }
     }
 }
@@ -336,88 +341,80 @@ static void dma_tx_isr(struct gd32_uart *uart)
         /* disable dma tx channel */
         dma_channel_disable(uart->dma.tx.periph, uart->dma.tx.channel);
 
-        uint32_t level = hw_interrupt_disable();
+        taskENTER_CRITICAL();
         struct dma_element *node = uart->tx_dma_list;
         if (node)
         {
             DL_DELETE(uart->tx_dma_list, node);
-            mp_free(node->buffer);
-            mp_free(node);
+            osPoolFree(uart->tx_dma_data_pool, node->buffer);
+            osPoolFree(uart->tx_dma_element_pool, node);
         }
         if (uart->tx_dma_list)
         {
-            _uadma_transmit(uart, uart->tx_dma_list->buffer, uart->tx_dma_list->size);
+            _uart_dma_transmit(uart, uart->tx_dma_list->buffer, uart->tx_dma_list->size);
         }
         else
         {
             uart->tx_dma_state = 0; // stop
         }
-        hw_interrupt_enable(level);
+        taskEXIT_CRITICAL();
     }
 }
 
 #if defined(BSP_USING_UART0)
 void USART0_IRQHandler(void)
 {
-    uint32_t level = hw_interrupt_disable();
-    usaisr(&uaobj[UART0_INDEX]);
-    hw_interrupt_enable(level);
+    taskENTER_CRITICAL();
+    gd32_uart_isr(&uart_obj[UART0_INDEX]);
+    taskEXIT_CRITICAL();
 }
-
 #endif /* BSP_USING_UART0 */
 
 #if defined(BSP_USING_UART1)
 void USART1_IRQHandler(void)
 {
-    uint32_t level = hw_interrupt_disable();
-    usaisr(&uaobj[UART1_INDEX]);
-    hw_interrupt_enable(level);
+    taskENTER_CRITICAL();
+    gd32_uart_isr(&uart_obj[UART1_INDEX]);
+    taskEXIT_CRITICAL();
 }
-
 #endif /* BSP_USING_UART1 */
 
 #if defined(BSP_USING_UART2)
 void USART2_IRQHandler(void)
 {
-    uint32_t level = hw_interrupt_disable();
-    usaisr(&uaobj[UART2_INDEX]);
-    hw_interrupt_enable(level);
+    taskENTER_CRITICAL();
+    gd32_uart_isr(&uart_obj[UART2_INDEX]);
+    taskEXIT_CRITICAL();
 }
-
 #endif /* BSP_USING_UART2 */
 
 #if defined(BSP_USING_UART3)
 void UART3_IRQHandler(void)
 {
-    uint32_t level = hw_interrupt_disable();
-    usaisr(&uaobj[UART3_INDEX]);
-    hw_interrupt_enable(level);
+    taskENTER_CRITICAL();
+    gd32_uart_isr(&uart_obj[UART3_INDEX]);
+    taskEXIT_CRITICAL();
 }
-
 #endif /* BSP_USING_UART3 */
 
 #ifdef BSP_UART0_TX_USING_DMA
 void DMA0_Channel3_IRQHandler(void)
 {
-    dma_tx_isr(&uaobj[UART0_INDEX]);
+    dma_tx_isr(&uart_obj[UART0_INDEX]);
 }
 #endif
 
 #ifdef BSP_UART1_TX_USING_DMA
 void DMA0_Channel6_IRQHandler(void)
 {
-    dma_tx_isr(&uaobj[UART1_INDEX]);
+    dma_tx_isr(&uart_obj[UART1_INDEX]);
 }
 #endif
 
 #ifdef BSP_UART2_TX_USING_DMA
 void DMA0_Channel1_IRQHandler(void)
 {
-#ifdef BSP_USING_SPI0_SLAVE
-    void _DMA0_Channel1_IRQHandler(void);
-    _DMA0_Channel1_IRQHandler();
-#endif
-    dma_tx_isr(&uaobj[UART2_INDEX]);
+    dma_tx_isr(&uart_obj[UART2_INDEX]);
 }
 #endif
 
@@ -428,11 +425,11 @@ void DMA1_Channel3_4_IRQHandler(void)
 void DMA1_Channel4_IRQHandler(void)
 #endif
 {
-    dma_tx_isr(&uaobj[UART3_INDEX]);
+    dma_tx_isr(&uart_obj[UART3_INDEX]);
 }
 #endif
 
-static void _uadma_receive(struct gd32_uart *uart, uint8_t *buffer, uint32_t size)
+static void _gd32_dma_receive(struct gd32_uart *uart, uint8_t *buffer, uint32_t size)
 {
     dma_parameter_struct dma_init_struct;
     dma_struct_para_init(&dma_init_struct);
@@ -465,14 +462,10 @@ static void _uadma_receive(struct gd32_uart *uart, uint8_t *buffer, uint32_t siz
     dma_channel_enable(uart->dma.rx.periph, uart->dma.rx.channel);
 
     /* enable usart idle interrupt */
-    usainterrupt_enable(uart->periph, USART_INT_IDLE);
+    usart_interrupt_enable(uart->periph, USART_INT_IDLE);
 
     /* enable dma receive */
-#if defined(SOC_SERIES_GD32F30x) || defined(SOC_SERIES_GD32F10x)
-    usadma_receive_config(uart->periph, USART_DENR_ENABLE);
-#else
-    usadma_receive_config(uart->periph, USART_RECEIVE_DMA_ENABLE);
-#endif
+    usart_dma_receive_config(uart->periph, USART_RECEIVE_DMA_ENABLE);
 }
 
 static void gd32_dma_config(struct gd32_uart *uart)
@@ -500,15 +493,16 @@ static void gd32_dma_config(struct gd32_uart *uart)
     dma_circulation_disable(uart->dma.tx.periph, uart->dma.tx.channel);
 
     /* enable tx dma interrupt */
-    nvic_irq_enable(uart->dma.tx.irq, 2, 0);
+    NVIC_SetPriority(uart->dma.tx.irq, configMAX_API_CALL_INTERRUPT_PRIORITY + 1);
+    NVIC_EnableIRQ(uart->dma.tx.irq);
 
     /* enable transmit complete interrupt */
     dma_interrupt_enable(uart->dma.tx.periph, uart->dma.tx.channel, DMA_CHXCTL_FTFIE);
 
-    _uadma_receive(uart, uart->serial_rx_rb->buffer_ptr, uart->serial_rx_rb->buffer_size);
+    _gd32_dma_receive(uart, uart->serial_rx_rb->buffer_ptr, uart->serial_rx_rb->buffer_size);
 }
 
-static void inline gd32_uainit(struct gd32_uart *uart)
+static void inline gd32_uart_init(struct gd32_uart *uart)
 {
     /* enable USART clock */
     rcu_periph_clock_enable(uart->tx_gpio_clk);
@@ -520,22 +514,22 @@ static void inline gd32_uainit(struct gd32_uart *uart)
     /* connect port to USARTx_Rx */
     gpio_init(uart->rx_port, GPIO_MODE_IN_FLOATING, GPIO_OSPEED_50MHZ, uart->rx_pin);
 
-    NVIC_SetPriority(uart->irqn, 0);
+    NVIC_SetPriority(uart->irqn, configMAX_API_CALL_INTERRUPT_PRIORITY + 1);
     NVIC_EnableIRQ(uart->irqn);
 
-    usabaudrate_set(uart->periph, uart->baudrate);
-    usaword_length_set(uart->periph, USART_WL_8BIT);
-    usastop_bit_set(uart->periph, USART_STB_1BIT);
-    usaparity_config(uart->periph, USART_PM_NONE);
-    usareceive_config(uart->periph, USART_RECEIVE_ENABLE);
-    usatransmit_config(uart->periph, USART_TRANSMIT_ENABLE);
-    usaenable(uart->periph);
+    usart_baudrate_set(uart->periph, uart->baudrate);
+    usart_word_length_set(uart->periph, USART_WL_8BIT);
+    usart_stop_bit_set(uart->periph, USART_STB_1BIT);
+    usart_parity_config(uart->periph, USART_PM_NONE);
+    usart_receive_config(uart->periph, USART_RECEIVE_ENABLE);
+    usart_transmit_config(uart->periph, USART_TRANSMIT_ENABLE);
+    usart_enable(uart->periph);
 
-    uart->serial_rx_rb = ringbuffer_create(gd32_uarx_buf_size(uart));
+    uart->serial_rx_rb = ringbuffer_create(gd32_uart_buf_size(uart));
     gd32_dma_config(uart);
 }
 
-void gd32_uaset_baudrate(void *handle, uint32_t baudrate)
+void gd32_uart_set_baudrate(void *handle, uint32_t baudrate)
 {
     struct gd32_uart *uart = (struct gd32_uart *)handle;
 
@@ -543,47 +537,44 @@ void gd32_uaset_baudrate(void *handle, uint32_t baudrate)
         return;
 
     uart->baudrate = baudrate;
-    usabaudrate_set(uart->periph, uart->baudrate);
+    usart_baudrate_set(uart->periph, uart->baudrate);
 }
 
-static int _usainit(void)
+static int uart_init(void)
 {
     int i;
-#ifdef SOC_SERIES_GD32F30x
-    rcu_periph_clock_enable(RCU_AF);
-    gpio_pin_remap_config(GPIO_USART2_FULL_REMAP, ENABLE);
-#endif
-    for (i = 0; i < sizeof(uaobj) / sizeof(uaobj[0]); i++)
+    for (i = 0; i < sizeof(uart_obj) / sizeof(uart_obj[0]); i++)
     {
-        uaobj[i].tx_dma_element_pool = mp_create("uatx_elem_pool",
-                                                 TX_DMA_DATA_MAX_CNT,
-                                                 sizeof(struct dma_element));
-        uaobj[i].tx_dma_data_pool = mp_create("uatx_data_pool",
-                                              TX_DMA_DATA_MAX_CNT,
-                                              TX_DMA_DATA_MAX_SIZE);
-        gd32_uainit(&uaobj[i]);
+        uart_obj[i].tx_dma_element_pool = osPoolInit(NULL,
+                                                     NULL,
+                                                     TX_DMA_DATA_MAX_CNT + 1,
+                                                     sizeof(struct dma_element));
+        uart_obj[i].tx_dma_data_pool = osPoolInit(NULL,
+                                                  NULL,
+                                                  TX_DMA_DATA_MAX_CNT,
+                                                  TX_DMA_DATA_MAX_SIZE);
+        gd32_uart_init(&uart_obj[i]);
     }
 
     return 0;
 }
-INIT_BOARD_EXPORT(_usainit);
 
-void *gd32_uaget_handle(const char *name)
+void *gd32_uart_get_handle(const char *name)
 {
     int i;
 
-    for (i = 0; i < sizeof(uaobj) / sizeof(uaobj[0]); i++)
+    for (i = 0; i < sizeof(uart_obj) / sizeof(uart_obj[0]); i++)
     {
-        if (strcmp(uaobj[i].device_name, name) == 0)
+        if (strcmp(uart_obj[i].device_name, name) == 0)
         {
-            return &uaobj[i];
+            return &uart_obj[i];
         }
     }
 
     return NULL;
 }
 
-int gd32_uaset_rx_indicate(void *handle, int (*rx_ind)(size_t size, void *userdata), void *userdata)
+int gd32_uart_set_rx_indicate(void *handle, int (*rx_ind)(size_t size, void *userdata), void *userdata)
 {
     struct gd32_uart *uart = (struct gd32_uart *)handle;
 
@@ -596,7 +587,7 @@ int gd32_uaset_rx_indicate(void *handle, int (*rx_ind)(size_t size, void *userda
     return 0;
 }
 
-struct ringbuffer *gd32_uaget_rx_rb(void *handle)
+struct ringbuffer *gd32_uart_get_rx_rb(void *handle)
 {
     struct gd32_uart *uart = (struct gd32_uart *)handle;
 
@@ -606,25 +597,24 @@ struct ringbuffer *gd32_uaget_rx_rb(void *handle)
     return uart->serial_rx_rb;
 }
 
-int gd32_uadma_send(void *handle, const uint8_t *buf, size_t size)
+int gd32_uart_dma_send(void *handle, const uint8_t *buf, size_t size)
 {
     struct gd32_uart *uart = (struct gd32_uart *)handle;
     struct dma_element *node;
-    uint32_t level;
 
     if ((uart == NULL) || (buf == NULL) || (size == 0))
         return -1;
 
-    node = mp_alloc(uart->tx_dma_element_pool, RT_WAITING_NO);
+    node = osPoolAlloc(uart->tx_dma_element_pool);
     if (node == NULL)
     {
         return -1;
     }
 
-    node->buffer = mp_alloc(uart->tx_dma_data_pool, RT_WAITING_NO);
+    node->buffer = osPoolAlloc(uart->tx_dma_data_pool);
     if (node->buffer == NULL)
     {
-        mp_free(node);
+        osPoolFree(uart->tx_dma_element_pool, node);
         return -1;
     }
 
@@ -632,40 +622,38 @@ int gd32_uadma_send(void *handle, const uint8_t *buf, size_t size)
     node->size = size;
     node->next = NULL;
     node->prev = NULL;
-
-    level = hw_interrupt_disable();
+    taskENTER_CRITICAL();
     DL_APPEND(uart->tx_dma_list, node);
 
     if (uart->tx_dma_state == 0) // stop
     {
         uart->tx_dma_state = 1; // running
-        _uadma_transmit(uart, uart->tx_dma_list->buffer, uart->tx_dma_list->size);
+        _uart_dma_transmit(uart, uart->tx_dma_list->buffer, uart->tx_dma_list->size);
     }
-    hw_interrupt_enable(level);
+    taskEXIT_CRITICAL();
     return 0;
 }
 
-int gd32_uaappend_dma_send_list(void *handle, struct dma_element *element)
+int gd32_uart_append_dma_send_list(void *handle, struct dma_element *element)
 {
     struct gd32_uart *uart = (struct gd32_uart *)handle;
-    uint32_t level;
 
     if ((uart == NULL) || (element == NULL))
         return -1;
 
-    level = hw_interrupt_disable();
+    taskENTER_CRITICAL();
     DL_APPEND(uart->tx_dma_list, element);
 
     if (uart->tx_dma_state == 0) // stop
     {
         uart->tx_dma_state = 1; // running
-        _uadma_transmit(uart, uart->tx_dma_list->buffer, uart->tx_dma_list->size);
+        _uart_dma_transmit(uart, uart->tx_dma_list->buffer, uart->tx_dma_list->size);
     }
-    hw_interrupt_enable(level);
+    taskEXIT_CRITICAL();
     return 0;
 }
 
-struct dma_element *gd32_uaalloc_dma_element(void *handle, size_t size)
+struct dma_element *gd32_uart_alloc_dma_element(void *handle, size_t size)
 {
     struct dma_element *element;
     struct gd32_uart *uart = (struct gd32_uart *)handle;
@@ -673,13 +661,13 @@ struct dma_element *gd32_uaalloc_dma_element(void *handle, size_t size)
     if (size == 0 || size > TX_DMA_DATA_MAX_SIZE)
         return NULL;
 
-    element = mp_alloc(uart->tx_dma_element_pool, RT_WAITING_NO);
+    element = pvPortMalloc(sizeof(struct dma_element));
     if (element)
     {
-        element->buffer = mp_alloc(uart->tx_dma_data_pool, RT_WAITING_NO);
+        element->buffer = osPoolAlloc(uart->tx_dma_data_pool);
         if (element->buffer == NULL)
         {
-            mp_free(element);
+            osPoolFree(uart->tx_dma_element_pool, element);
             element = NULL;
         }
         else

@@ -6,6 +6,7 @@
 #include "config.h"
 #include <gd32c10x.h>
 #include "drv_dma.h"
+#include "ringbuffer.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -41,7 +42,7 @@ extern "C"
      * @param {void} *handle，UART 句柄
      * @return {struct rt_ringbuffer*} 返回环形缓冲区句柄，失败返回 RT_NULL
      */
-    struct rt_ringbuffer *gd32_uart_get_rx_rb(void *handle);
+    struct ringbuffer *gd32_uart_get_rx_rb(void *handle);
 
     /**
      * @description: 通过 DMA 发送数据

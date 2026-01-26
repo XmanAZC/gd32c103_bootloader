@@ -79,9 +79,9 @@
 /* Interrupt nesting behaviour configuration. *********************************/
 /******************************************************************************/
 
-#define configKERNEL_INTERRUPT_PRIORITY          0U
-#define configMAX_SYSCALL_INTERRUPT_PRIORITY     0U
-#define configMAX_API_CALL_INTERRUPT_PRIORITY    0U
+#define configKERNEL_INTERRUPT_PRIORITY          15U
+#define configMAX_SYSCALL_INTERRUPT_PRIORITY     5U
+#define configMAX_API_CALL_INTERRUPT_PRIORITY    5U
 
 /******************************************************************************/
 /* Hook and callback function related definitions. ****************************/

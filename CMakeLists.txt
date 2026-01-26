@@ -52,6 +52,9 @@ endif()
 set(PROJECT_SOURCES
 	src/main.c
 	src/syscall.c
+	src/drv_simple_uart.c
+	src/freertos_mpool.c
+	src/ringbuffer.c
 	GD32C10x_Firmware_Library/GD32C10x_standard_peripheral/Source/gd32c10x_dma.c
 	GD32C10x_Firmware_Library/CMSIS/GD/GD32C10x/Source/system_gd32c10x.c
 	GD32C10x_Firmware_Library/GD32C10x_standard_peripheral/Source/gd32c10x_usart.c
