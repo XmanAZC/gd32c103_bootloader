@@ -492,7 +492,7 @@ static void gd32_dma_config(struct gd32_uart *uart)
     dma_circulation_disable(uart->dma.tx.periph, uart->dma.tx.channel);
 
     /* enable tx dma interrupt */
-    NVIC_SetPriority(uart->dma.tx.irq, configMAX_API_CALL_INTERRUPT_PRIORITY + 1);
+    NVIC_SetPriority(uart->dma.tx.irq, configMAX_SYSCALL_INTERRUPT_PRIORITY + 1);
     NVIC_EnableIRQ(uart->dma.tx.irq);
 
     /* enable transmit complete interrupt */
@@ -538,7 +538,7 @@ static void inline gd32_uart_init(struct gd32_uart *uart)
     /* connect port to USARTx_Rx */
     gpio_init(uart->rx_port, GPIO_MODE_IN_FLOATING, GPIO_OSPEED_50MHZ, uart->rx_pin);
 
-    NVIC_SetPriority(uart->irqn, configMAX_API_CALL_INTERRUPT_PRIORITY + 1);
+    NVIC_SetPriority(uart->irqn, configMAX_SYSCALL_INTERRUPT_PRIORITY + 1);
     NVIC_EnableIRQ(uart->irqn);
 
     usart_baudrate_set(uart->periph, uart->baudrate);
@@ -693,7 +693,7 @@ struct dma_element *gd32_uart_alloc_dma_element(void *handle, size_t size)
     if (size == 0 || size > TX_DMA_DATA_MAX_SIZE)
         return NULL;
 
-    element = pvPortMalloc(sizeof(struct dma_element));
+    element = osPoolAlloc(uart->tx_dma_element_pool);
     if (element)
     {
         element->buffer = osPoolAlloc(uart->tx_dma_data_pool);

@@ -1,10 +1,9 @@
 #ifndef XLINK_H
 #define XLINK_H
 
-#include <FreeRTOS.h>
-#include <semphr.h>
 #include <stddef.h>
-#include <drv_simple_uart.h>
+#include <stdint.h>
+#include "xlink_port.h"
 
 #define XLINK_SOF 0xA5u
 #define XLINK_MAX_PAYLOAD 250u
@@ -31,6 +30,7 @@ typedef struct xlink_message_list_element_def
     *xlink_message_list_element_p;
 
 #ifndef XLINK_CRC_16
+#define XLINK_CRC_16
 #define XLINK_INIT_CRC16 0xFFFF
 
 static const uint16_t crc_table[256] = {
@@ -117,68 +117,108 @@ enum xlink_msg_rx_state
     XLINK_MSG_RX_WAIT_CHECKSUM
 };
 
-typedef int (*xlink_transport_send_t)(const uint8_t *data, uint16_t len);
-
 typedef struct xlink_context_def
 {
-    SemaphoreHandle_t global_mutex;
+    const xlink_port_api_t *port;
+    void *transport_handle;
+
+    void *global_mutex;
     xlink_comp_id_handler_element_p comp_id_handler_map;
     xlink_comp_id_handler_element_p *comp_id_handler_map_pos;
 
-    SemaphoreHandle_t rx_mutex;
     enum xlink_msg_rx_state rx_msg_state;
     xlink_message_t rx_msg;
     uint16_t rx_msg_crc;
     uint16_t rx_msg_pos;
     uint16_t expected_len;
 
-    void *gd32_serial_handle;
-
 } xlink_context_t,
     *xlink_context_p;
 
-static inline xlink_context_p xlink_context_create(void *_gd32_serial_handle)
+static inline xlink_context_p xlink_context_create(const xlink_port_api_t *port, void *transport_handle)
 {
-    xlink_context_p context = (xlink_context_p)pvPortMalloc(sizeof(xlink_context_t));
+    if (port == NULL || port->malloc_fn == NULL || port->free_fn == NULL || port->transport_send_fn == NULL)
+    {
+        return NULL;
+    }
+
+    xlink_context_p context = (xlink_context_p)port->malloc_fn(sizeof(xlink_context_t));
     if (context == NULL)
     {
         return NULL;
     }
 
+    context->port = port;
+    context->transport_handle = transport_handle;
     context->comp_id_handler_map = NULL;
     context->comp_id_handler_map_pos = &context->comp_id_handler_map;
     context->rx_msg_pos = 0;
     context->rx_msg_crc = 0;
     context->rx_msg_state = XLINK_MSG_RX_WAIT_MAGIC;
 
-    context->global_mutex = xSemaphoreCreateMutex();
-    if (context->global_mutex == NULL)
+    context->global_mutex = NULL;
+    if (port->mutex_create_fn != NULL)
     {
-        vPortFree(context);
-        return NULL;
+        context->global_mutex = port->mutex_create_fn();
+        if (context->global_mutex == NULL)
+        {
+            port->free_fn(context);
+            return NULL;
+        }
     }
-    context->rx_mutex = xSemaphoreCreateMutex();
-    if (context->rx_mutex == NULL)
-    {
-        vSemaphoreDelete(context->global_mutex);
-        vPortFree(context);
-        return NULL;
-    }
-
-    context->gd32_serial_handle = _gd32_serial_handle;
 
     return context;
 }
 
-static inline int xlink_register_msg_handler(xlink_context_p context,
-                                             uint8_t comp_id,
-                                             uint8_t msg_id,
-                                             xlink_msg_handler_t handler,
-                                             void *user_data)
+static inline void xlink_context_delete(xlink_context_p context)
 {
-    if (xSemaphoreTake(context->global_mutex, portMAX_DELAY) != pdTRUE)
+    if (context == NULL)
     {
-        return -1;
+        return;
+    }
+
+    const xlink_port_api_t *port = context->port;
+    if (port == NULL)
+    {
+        return;
+    }
+
+    if (context->global_mutex != NULL && port->mutex_delete_fn != NULL)
+    {
+        port->mutex_delete_fn(context->global_mutex);
+    }
+
+    xlink_comp_id_handler_element_p comp_id_element = context->comp_id_handler_map;
+    while (comp_id_element != NULL)
+    {
+        xlink_message_handler_element_p handler_element = comp_id_element->handlers_list;
+        while (handler_element != NULL)
+        {
+            xlink_message_handler_element_p next_handler = handler_element->next;
+            port->free_fn(handler_element);
+            handler_element = next_handler;
+        }
+        xlink_comp_id_handler_element_p next_comp_id_element = comp_id_element->next;
+        port->free_fn(comp_id_element);
+        comp_id_element = next_comp_id_element;
+    }
+
+    port->free_fn(context);
+}
+
+static inline xlink_msg_handler_t xlink_register_msg_handler(xlink_context_p context,
+                                                             uint8_t comp_id,
+                                                             uint8_t msg_id,
+                                                             xlink_msg_handler_t handler,
+                                                             void *user_data)
+{
+    if (context == NULL)
+    {
+        return NULL;
+    }
+    if (xlink_port_mutex_lock(context->port, context->global_mutex) != 0)
+    {
+        return NULL;
     }
 
     xlink_comp_id_handler_element_p comp_id_element = context->comp_id_handler_map;
@@ -192,11 +232,11 @@ static inline int xlink_register_msg_handler(xlink_context_p context,
     }
     if (comp_id_element == NULL)
     {
-        comp_id_element = (xlink_comp_id_handler_element_p)pvPortMalloc(sizeof(xlink_comp_id_handler_element_t));
+        comp_id_element = (xlink_comp_id_handler_element_p)context->port->malloc_fn(sizeof(xlink_comp_id_handler_element_t));
         if (comp_id_element == NULL)
         {
-            xSemaphoreGive(context->global_mutex);
-            return -1;
+            xlink_port_mutex_unlock(context->port, context->global_mutex);
+            return NULL;
         }
         comp_id_element->comp_id = comp_id;
         comp_id_element->handlers_list = NULL;
@@ -213,17 +253,17 @@ static inline int xlink_register_msg_handler(xlink_context_p context,
             msg_id_pos->handler == handler &&
             msg_id_pos->user_data == user_data)
         {
-            xSemaphoreGive(context->global_mutex);
-            return -1; // Handler already registered
+            xlink_port_mutex_unlock(context->port, context->global_mutex);
+            return NULL; // Handler already registered
         }
         msg_id_pos = msg_id_pos->next;
     }
 
-    xlink_message_handler_element_p new_handler_element = (xlink_message_handler_element_p)pvPortMalloc(sizeof(xlink_msg_id_handler_element_t));
+    xlink_message_handler_element_p new_handler_element = (xlink_message_handler_element_p)context->port->malloc_fn(sizeof(xlink_msg_id_handler_element_t));
     if (new_handler_element == NULL)
     {
-        xSemaphoreGive(context->global_mutex);
-        return -1;
+        xlink_port_mutex_unlock(context->port, context->global_mutex);
+        return NULL;
     }
     new_handler_element->msg_id = msg_id;
     new_handler_element->handler = handler;
@@ -231,8 +271,8 @@ static inline int xlink_register_msg_handler(xlink_context_p context,
     new_handler_element->next = NULL;
     *comp_id_element->handlers_list_pos = new_handler_element;
     comp_id_element->handlers_list_pos = &new_handler_element->next;
-    xSemaphoreGive(context->global_mutex);
-    return 0;
+    xlink_port_mutex_unlock(context->port, context->global_mutex);
+    return handler;
 }
 
 static inline int xlink_unregister_msg_handler(xlink_context_p context,
@@ -241,9 +281,13 @@ static inline int xlink_unregister_msg_handler(xlink_context_p context,
                                                xlink_msg_handler_t handler,
                                                void *user_data)
 {
-    if (xSemaphoreTake(context->global_mutex, portMAX_DELAY) != pdTRUE)
+    if (context == NULL)
     {
         return -1;
+    }
+    if (xlink_port_mutex_lock(context->port, context->global_mutex) != 0)
+    {
+        return -2;
     }
 
     xlink_comp_id_handler_element_p comp_id_element = context->comp_id_handler_map;
@@ -257,8 +301,8 @@ static inline int xlink_unregister_msg_handler(xlink_context_p context,
     }
     if (comp_id_element == NULL)
     {
-        xSemaphoreGive(context->global_mutex);
-        return -1; // Component ID not found
+        xlink_port_mutex_unlock(context->port, context->global_mutex);
+        return -3; // Component ID not found
     }
 
     xlink_message_handler_element_p *msg_id_pos = &comp_id_element->handlers_list;
@@ -274,16 +318,16 @@ static inline int xlink_unregister_msg_handler(xlink_context_p context,
             {
                 comp_id_element->handlers_list_pos = msg_id_pos;
             }
-            vPortFree(current);
-            xSemaphoreGive(context->global_mutex);
+            context->port->free_fn(current);
+            xlink_port_mutex_unlock(context->port, context->global_mutex);
             return 0; // Successfully unregistered
         }
         msg_id_pos = &current->next;
         current = current->next;
     }
 
-    xSemaphoreGive(context->global_mutex);
-    return -1; // Handler not found
+    xlink_port_mutex_unlock(context->port, context->global_mutex);
+    return -4; // Handler not found
 }
 
 static inline int xlink_process_rx(xlink_context_p context,
@@ -309,7 +353,7 @@ static inline int xlink_process_rx(xlink_context_p context,
         context->rx_msg_pos++;
         if (context->rx_msg_pos == context->expected_len)
         {
-            context->expected_len += context->rx_msg.len + 2; // Add payload length + CRC
+            context->expected_len = context->rx_msg.len + 2; // Add payload length + CRC
             context->rx_msg_state = XLINK_MSG_RX_WAIT_PAYLOAD;
             context->rx_msg_pos = 0;
         }
@@ -319,13 +363,21 @@ static inline int xlink_process_rx(xlink_context_p context,
     case XLINK_MSG_RX_WAIT_PAYLOAD:
     case XLINK_MSG_RX_WAIT_CHECKSUM:
     {
-        context->rx_msg.payload[context->rx_msg_pos++] = data;
-        if (context->rx_msg_pos >= context->expected_len)
+        if (context->rx_msg_pos < context->expected_len - 2)
+        {
+            context->rx_msg.payload[context->rx_msg_pos++] = data;
+            context->rx_msg_crc = xlink_crc16_with_init(&data, 1, context->rx_msg_crc);
+        }
+        else
+        {
+            // Receiving CRC bytes
+            ((uint8_t *)(&context->rx_msg.crc))[context->rx_msg_pos - (context->expected_len - 2)] = data;
+            context->rx_msg_pos++;
+        }
+        if (context->rx_msg_pos == context->expected_len)
         {
             context->rx_msg_state = XLINK_MSG_RX_WAIT_MAGIC;
-            uint16_t received_crc = (uint16_t)(context->rx_msg.payload[context->rx_msg_pos - 2]) |
-                                    ((uint16_t)(context->rx_msg.payload[context->rx_msg_pos - 1]) << 8);
-            if (received_crc == context->rx_msg_crc)
+            if (context->rx_msg.crc == context->rx_msg_crc)
             {
                 // Valid message received
                 // call handler
@@ -355,19 +407,14 @@ static inline int xlink_process_rx(xlink_context_p context,
             }
             return -2; // CRC error
         }
-        else if (context->rx_msg_pos <= context->expected_len - sizeof(uint16_t))
-        {
-            context->rx_msg_crc = xlink_crc16_with_init(&data, 1, context->rx_msg_crc);
-        }
     }
     break;
     }
     return -1;
 }
 
-void _memcpy_and_crc16(void *dst, const void *src, size_t count)
+static inline void _memcpy_and_crc16(void *dst, const void *src, size_t count, uint16_t crc)
 {
-    uint16_t crc = XLINK_INIT_CRC16;
     uint8_t *dst_ptr = (uint8_t *)dst;
     const uint8_t *src_ptr = (const uint8_t *)src;
 
@@ -388,28 +435,36 @@ static inline int xlink_send(xlink_context_p context,
                              const uint8_t *payload,
                              uint8_t payload_len)
 {
-    struct dma_element *dma_node = gd32_uart_alloc_dma_element(context->gd32_serial_handle,
-                                                               payload_len +
-                                                                   XLINK_LENGTH_OF_HEADER +
-                                                                   XLINK_LENGTH_OF_CRC);
-    if (dma_node == NULL)
+    if (context == NULL || context->port == NULL || context->port->transport_send_fn == NULL)
     {
         return -1;
     }
-    xlink_message_p msg = (xlink_message_p)(dma_node->buffer);
-    if (msg == NULL)
+    if (payload_len > 0u && payload == NULL)
     {
         return -1;
     }
-
+    if (payload_len > XLINK_MAX_PAYLOAD)
+    {
+        return -1;
+    }
+    xlink_frame_t *frame = context->port->frame_send_alloc_fn(context->transport_handle,
+                                                              (uint16_t)(XLINK_LENGTH_OF_HEADER + payload_len + XLINK_LENGTH_OF_CRC));
+    if (frame == NULL)
+    {
+        return -1;
+    }
+    uint16_t crc = XLINK_INIT_CRC16;
+    xlink_message_p msg = (xlink_message_p)(frame->buffer);
+    frame->size = (uint16_t)(XLINK_LENGTH_OF_HEADER + payload_len + XLINK_LENGTH_OF_CRC);
     msg->sof = XLINK_SOF;
     msg->len = payload_len;
     msg->comp_id = comp_id;
     msg->msg_id = msg_id;
-    _memcpy_and_crc16(msg->payload, payload, payload_len);
-    gd32_uart_append_dma_send_list(context->gd32_serial_handle, dma_node);
+    crc = xlink_crc16_with_init(&msg->len, 3, crc);
+    _memcpy_and_crc16(msg->payload, payload, payload_len, crc);
 
-    return 0;
+    uint16_t total_len = (uint16_t)(XLINK_LENGTH_OF_HEADER + payload_len + XLINK_LENGTH_OF_CRC);
+    return context->port->transport_send_fn(context->transport_handle, frame);
 }
 
 #endif // XLINK_H

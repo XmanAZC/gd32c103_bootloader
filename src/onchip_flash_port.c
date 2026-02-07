@@ -59,28 +59,6 @@ int fmc_erase_pages_check(uint32_t page_address, uint32_t page_num)
     return 0;
 }
 
-void fmc_program_word(uint32_t address, void *data, uint32_t size)
-{
-    asm volatile("cpsid i"); /* close interrupt */
-
-    /* unlock the flash program/erase controller */
-    fmc_unlock();
-
-    /* program flash */
-    while (size--)
-    {
-        fmc_word_program(address, *(uint32_t *)data);
-        data = (void *)((uint8_t *)data + 4);
-        address += 4;
-        fmc_flag_clear(FMC_FLAGS);
-    }
-
-    /* lock the main FMC after the program operation */
-    fmc_lock();
-
-    asm volatile("cpsie i"); /* open interrupt */
-}
-
 uint32_t fmc_program_data(uint32_t address, void *data, uint32_t size)
 {
     uint32_t i;
