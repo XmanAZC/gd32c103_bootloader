@@ -10,162 +10,36 @@
 #include "drv_simple_uart.h"
 #include "freertos_mpool.h"
 #include "xlink_upgrade.h"
+#include "xlink_control.h"
+#include "xlink_port_freertos.h"
 #include "onchip_flash_port.h"
 
-static void exampleTask(void *parameters) __attribute__((noreturn));
+static void live_led_task(void *parameters) __attribute__((noreturn));
 
-static void xlinkTask(void *parameters);
-
-static uint32_t start_address;
-static uint32_t size_bytes;
-static uint32_t chunk_size;
-static uint32_t check_crc32;
-
-static int GetFirmwareInfo_cb(uint8_t comp_id,
-                              uint8_t msg_id,
-                              const uint8_t *payload,
-                              uint8_t payload_len,
-                              void *user_data)
-{
-#define BOOTLOADER_VERSION 0x00010001
-#define BOOTLOADER_COMMIT_HASH 0x12345678
-#define BOOTLOADER_COMPILE_TIMESTAMP 0x644B5A00
-    void Reset_Handler(void);
-    xlink_upgrade_get_firmware_info_t *msg = (xlink_upgrade_get_firmware_info_t *)payload;
-    xlink_partition_type_t partition_type;
-    uint32_t version, size_bytes, commit_hash, compile_timestamp;
-    switch (msg->required_partition)
-    {
-    case XLINK_PARTITION_TYPE_BOOTLOADER:
-        version = BOOTLOADER_VERSION;
-        size_bytes = 0;
-        commit_hash = BOOTLOADER_COMMIT_HASH;
-        compile_timestamp = BOOTLOADER_COMPILE_TIMESTAMP;
-        break;
-    case XLINK_PARTITION_TYPE_APP_A:
-        partition_type = XLINK_PARTITION_TYPE_APP_A;
-        AppInfo_p app_info = (AppInfo_p)PARTITION_ADDRESS_APP_A_INFO;
-        version = app_info->version;
-        size_bytes = app_info->size_bytes;
-        commit_hash = app_info->commit_hash;
-        compile_timestamp = app_info->compile_timestamp;
-        break;
-    case XLINK_PARTITION_TYPE_APP_B:
-        partition_type = XLINK_PARTITION_TYPE_APP_B;
-        app_info = (AppInfo_p)PARTITION_ADDRESS_APP_B_INFO;
-        version = app_info->version;
-        size_bytes = app_info->size_bytes;
-        commit_hash = app_info->commit_hash;
-        compile_timestamp = app_info->compile_timestamp;
-        break;
-    default:
-        return -1;
-        break;
-    }
-    xlink_upgrade_firmware_info_send((xlink_context_p)user_data,
-                                     partition_type,
-                                     version,
-                                     size_bytes,
-                                     commit_hash,
-                                     compile_timestamp,
-                                     (size_t)Reset_Handler);
-    return 0;
-}
-
-static int StartFirmwareUpgrade_cb(uint8_t comp_id,
-                                   uint8_t msg_id,
-                                   const uint8_t *payload,
-                                   uint8_t payload_len,
-                                   void *user_data)
-{
-    xlink_upgrade_start_firmware_upgrade_t *msg = (xlink_upgrade_start_firmware_upgrade_t *)payload;
-    start_address = msg->start_address;
-    size_bytes = msg->size_bytes;
-    chunk_size = msg->chunk_size;
-    check_crc32 = XLINK_INIT_CRC16;
-    fmc_erase_pages(start_address, size_to_pages(size_bytes));
-    xlink_upgrade_start_firmware_upgrade_response_send((xlink_context_p)user_data,
-                                                       true);
-    return 0;
-}
-
-static int FirmwareChunk_cb(uint8_t comp_id,
-                            uint8_t msg_id,
-                            const uint8_t *payload,
-                            uint8_t payload_len,
-                            void *user_data)
-{
-    xlink_upgrade_firmware_chunk_t *msg = (xlink_upgrade_firmware_chunk_t *)payload;
-    size_t write_address = start_address + msg->offset * chunk_size;
-    size_t write_size = msg->data_len;
-    if (write_address + write_size > start_address + size_bytes)
-    {
-        xlink_upgrade_firmware_chunk_response_send((xlink_context_p)user_data,
-                                                   msg->offset,
-                                                   false);
-        return -1;
-    }
-    fmc_program_word(write_address, msg->data, write_size);
-    check_crc32 = xlink_crc16_with_init(msg->data, write_size, check_crc32);
-    xlink_upgrade_firmware_chunk_response_send((xlink_context_p)user_data,
-                                               msg->offset,
-                                               true);
-    return 0;
-}
-
-static int FinalizeFirmwareUpgrade_cb(uint8_t comp_id,
-                                      uint8_t msg_id,
-                                      const uint8_t *payload,
-                                      uint8_t payload_len,
-                                      void *user_data)
-{
-    xlink_upgrade_finalize_firmware_upgrade_t *msg = (xlink_upgrade_finalize_firmware_upgrade_t *)payload;
-    bool success = (msg->expected_crc32 == check_crc32);
-    xlink_upgrade_finalize_firmware_upgrade_response_send((xlink_context_p)user_data,
-                                                          success);
-    return 0;
-}
-
-int upgrade_init(xlink_context_p context)
-{
-
-    xlink_register_msg_handler(context,
-                               XLINK_COMP_ID_UPGRADE,
-                               XLINK_UPGRADE_MSG_ID_GET_FIRMWARE_INFO,
-                               GetFirmwareInfo_cb,
-                               NULL);
-
-    xlink_register_msg_handler(context,
-                               XLINK_COMP_ID_UPGRADE,
-                               XLINK_UPGRADE_MSG_ID_START_FIRMWARE_UPGRADE,
-                               StartFirmwareUpgrade_cb,
-                               NULL);
-    xlink_register_msg_handler(context,
-                               XLINK_COMP_ID_UPGRADE,
-                               XLINK_UPGRADE_MSG_ID_FIRMWARE_CHUNK,
-                               FirmwareChunk_cb,
-                               NULL);
-    xlink_register_msg_handler(context,
-                               XLINK_COMP_ID_UPGRADE,
-                               XLINK_UPGRADE_MSG_ID_FINALIZE_FIRMWARE_UPGRADE,
-                               FinalizeFirmwareUpgrade_cb,
-                               NULL);
-
-    return 0;
-}
+static void xlinkTask(void *parameters) __attribute__((noreturn));
 
 void entry(void)
 {
-    static StaticTask_t exampleTaskTCB;
-    static StackType_t exampleTaskStack[configMINIMAL_STACK_SIZE];
+    static StaticTask_t xlinkTaskTCB;
+    static StackType_t xlinkTaskStack[1024];
+    (void)xTaskCreateStatic(xlinkTask,
+                            "xlink",
+                            1024,
+                            NULL,
+                            configMAX_PRIORITIES - 2U,
+                            &(xlinkTaskStack[0]),
+                            &(xlinkTaskTCB));
 
-    (void)xTaskCreateStatic(exampleTask,
-                            "example",
+    static StaticTask_t live_led_TCB;
+    static StackType_t live_led_Stack[configMINIMAL_STACK_SIZE];
+
+    (void)xTaskCreateStatic(live_led_task,
+                            "live_led",
                             configMINIMAL_STACK_SIZE,
                             NULL,
-                            configMAX_PRIORITIES - 1U,
-                            &(exampleTaskStack[0]),
-                            &(exampleTaskTCB));
+                            configMAX_PRIORITIES - 3U,
+                            &(live_led_Stack[0]),
+                            &(live_led_TCB));
 
     /* Start the scheduler. */
     vTaskStartScheduler();
@@ -178,25 +52,47 @@ void entry(void)
 
 static int uart_rx_ind(size_t size, void *userdata)
 {
-    SemaphoreHandle_t semaphore = (SemaphoreHandle_t)userdata;
+    SemaphoreHandle_t *semaphore = (SemaphoreHandle_t *)userdata;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    xSemaphoreGiveFromISR(semaphore, &xHigherPriorityTaskWoken);
+    xSemaphoreGiveFromISR(*semaphore, &xHigherPriorityTaskWoken);
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     return 0;
 }
 
+static xlink_frame_t *xlink_frame_send_alloc(void *transport_handle, uint16_t needed)
+{
+    return (xlink_frame_t *)gd32_uart_alloc_dma_element(transport_handle, needed);
+}
+
+static int xlink_uart_send(void *transport_handle, xlink_frame_t *frame)
+{
+    return gd32_uart_append_dma_send_list(transport_handle, (struct dma_element *)frame);
+}
+static xlink_context_p xlink_ctx = NULL;
 static void xlinkTask(void *parameters)
 {
+    int upgrade_init(xlink_context_p context);
     /* Unused parameters. */
     (void)parameters;
     uart_init();
     void *uart_handle = gd32_uart_get_handle("uart1");
-    SemaphoreHandle_t uart_rx_semaphore = xSemaphoreCreateCounting(100, 0);
+    SemaphoreHandle_t uart_rx_semaphore = xSemaphoreCreateCounting(0xffffffff, 0);
     if (uart_handle == NULL)
     {
-        return;
+        for (;;)
+            vTaskDelay(WINT_MAX);
     }
-    xlink_context_p xlink_ctx = xlink_context_create(uart_handle);
+    static xlink_port_api_t xlink_port = {
+        .malloc_fn = xlink_freertos_malloc,
+        .free_fn = xlink_freertos_free,
+        .mutex_create_fn = xlink_freertos_mutex_create,
+        .mutex_delete_fn = xlink_freertos_mutex_delete,
+        .mutex_lock_fn = xlink_freertos_mutex_lock,
+        .mutex_unlock_fn = xlink_freertos_mutex_unlock,
+        .transport_send_fn = xlink_uart_send,
+        .frame_send_alloc_fn = xlink_frame_send_alloc,
+    };
+    xlink_ctx = xlink_context_create(&xlink_port, uart_handle);
     upgrade_init(xlink_ctx);
     gd32_uart_set_rx_indicate(uart_handle, uart_rx_ind, &uart_rx_semaphore);
 
@@ -222,11 +118,8 @@ static void xlinkTask(void *parameters)
     }
 }
 
-static void exampleTask(void *parameters)
+static void live_led_task(void *parameters)
 {
-    static StaticTask_t xlinkTaskTCB;
-    static StackType_t xlinkTaskStack[1024];
-
     /* Unused parameters. */
     (void)parameters;
     rcu_periph_clock_enable(RCU_GPIOB);
@@ -234,13 +127,6 @@ static void exampleTask(void *parameters)
     gpio_init(GPIOB, GPIO_MODE_OUT_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_7);
     int led_state = 1;
 
-    (void)xTaskCreateStatic(xlinkTask,
-                            "xlink",
-                            1024,
-                            NULL,
-                            configMAX_PRIORITIES - 2U,
-                            &(xlinkTaskStack[0]),
-                            &(xlinkTaskTCB));
     for (;;)
     {
         /* Example Task Code */
@@ -253,7 +139,8 @@ static void exampleTask(void *parameters)
         {
             gpio_bit_reset(GPIOB, GPIO_PIN_7); // Turn LED off
         }
-        vTaskDelay(pdMS_TO_TICKS(1000)); /* delay 100 ms */
+        xlink_control_led_state_send(xlink_ctx, led_state);
+        vTaskDelay(pdMS_TO_TICKS(100)); /* delay 1000 ms */
     }
 }
 

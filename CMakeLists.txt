@@ -41,6 +41,7 @@ else()
 endif()
 
 set(BOOTLOADER_SOURCES
+    src/upgrade.c
 	src/boot_loader_main.c
 	src/syscall.c
 	src/drv_simple_uart.c
@@ -49,6 +50,7 @@ set(BOOTLOADER_SOURCES
 )
 
 set(APP_SOURCES
+    src/upgrade.c
 	src/main.c
 	src/syscall.c
 	src/drv_simple_uart.c
@@ -109,6 +111,7 @@ add_custom_command(TARGET appa.elf POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O binary appa.elf appa.bin
     COMMAND ${CMAKE_SIZE} appa.elf
 )
+
 add_executable(appb.elf $<TARGET_OBJECTS:app_objects>)
 set_target_properties(appb.elf PROPERTIES OUTPUT_NAME "appb.elf")
 target_link_options(appb.elf PRIVATE

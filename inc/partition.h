@@ -35,7 +35,7 @@ extern "C"
         PARTITION_SIZE_APP_A = 48 * 1024,
         PARTITION_SIZE_APP_B_INFO = 2 * 1024,
         PARTITION_SIZE_APP_B = 48 * 1024,
-        PARTITION_SIZE_PARAMS = 8 * 1024
+        PARTITION_SIZE_PARAMS = 10 * 1024
     };
 
     enum PartitionAddress
