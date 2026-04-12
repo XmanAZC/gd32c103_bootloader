@@ -39,15 +39,15 @@
 /* Scheduling behaviour related definitions. **********************************/
 /******************************************************************************/
 
-#define configTICK_RATE_HZ                         ( 100U )
+#define configTICK_RATE_HZ                         ( 1000U )
 #define configUSE_PREEMPTION                       1
-#define configUSE_TIME_SLICING                     1
+#define configUSE_TIME_SLICING                     0
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION    0
 #define configUSE_TICKLESS_IDLE                    1
 #define configMAX_PRIORITIES                       10U
 #define configMINIMAL_STACK_SIZE                   128U
 #define configMAX_TASK_NAME_LEN                    4U
-#define configTICK_TYPE_WIDTH_IN_BITS              TICK_TYPE_WIDTH_64_BITS
+#define configTICK_TYPE_WIDTH_IN_BITS              TICK_TYPE_WIDTH_32_BITS
 #define configIDLE_SHOULD_YIELD                    0
 #define configTASK_NOTIFICATION_ARRAY_ENTRIES      1U
 #define configQUEUE_REGISTRY_SIZE                  0U
@@ -62,7 +62,10 @@
 /* Software timer related definitions. ****************************************/
 /******************************************************************************/
 
-#define configUSE_TIMERS                0
+#define configUSE_TIMERS                1
+#define configTIMER_TASK_PRIORITY       (configMAX_PRIORITIES - 1)
+#define configTIMER_QUEUE_LENGTH        10
+#define configTIMER_TASK_STACK_DEPTH    (configMINIMAL_STACK_SIZE * 2)
 
 /******************************************************************************/
 /* Memory allocation related definitions. *************************************/
@@ -70,7 +73,7 @@
 
 #define configSUPPORT_STATIC_ALLOCATION              1
 #define configSUPPORT_DYNAMIC_ALLOCATION             1
-#define configTOTAL_HEAP_SIZE                        (20 * 1024)
+#define configTOTAL_HEAP_SIZE                        (24 * 1024)
 #define configAPPLICATION_ALLOCATED_HEAP             0
 #define configSTACK_ALLOCATION_FROM_SEPARATE_HEAP    0
 #define configUSE_MINI_LIST_ITEM                     0
@@ -119,9 +122,9 @@
 #define configUSE_APPLICATION_TASK_TAG         1
 #define INCLUDE_vTaskPrioritySet               0
 #define INCLUDE_uxTaskPriorityGet              0
-#define INCLUDE_vTaskDelete                    0
+#define INCLUDE_vTaskDelete                    1
 #define INCLUDE_vTaskSuspend                   1
-#define INCLUDE_vTaskDelayUntil                0
+#define INCLUDE_vTaskDelayUntil                1
 #define INCLUDE_vTaskDelay                     1
 #define INCLUDE_xTaskGetSchedulerState         0
 #define INCLUDE_xTaskGetCurrentTaskHandle      0

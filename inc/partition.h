@@ -1,5 +1,6 @@
-#ifndef _PATRITION_H_
-#define _PATRITION_H_
+#pragma once
+#ifndef _PARTITION_H_
+#define _PARTITION_H_
 
 #include <stdint.h>
 #include <stddef.h>
@@ -12,7 +13,7 @@ extern "C"
     /*
      * | Bootloader | Bootfrom | APP_A_INFO | APP_A | APP_B_INFO | APP_B | Params |
      * | ---------- | -------- | ---------- | ----- | ---------- | ----- | ------ |
-     * | 16KB       | 2KB      | 2KB        | 48KB  | 2KB        | 48KB  | 8KB    |
+     * | 4KB        | 2KB      | 2KB        | 50KB  | 2KB        | 50KB  | 18KB   |
      */
 
     enum Partition
@@ -29,13 +30,13 @@ extern "C"
 
     enum PartitionSize
     {
-        PARTITION_SIZE_BOOTLOADER = 16 * 1024,
+        PARTITION_SIZE_BOOTLOADER = 4 * 1024,
         PARTITION_SIZE_BOOTFROM = 2 * 1024,
         PARTITION_SIZE_APP_A_INFO = 2 * 1024,
-        PARTITION_SIZE_APP_A = 48 * 1024,
+        PARTITION_SIZE_APP_A = 50 * 1024,
         PARTITION_SIZE_APP_B_INFO = 2 * 1024,
-        PARTITION_SIZE_APP_B = 48 * 1024,
-        PARTITION_SIZE_PARAMS = 10 * 1024
+        PARTITION_SIZE_APP_B = 50 * 1024,
+        PARTITION_SIZE_PARAMS = 18 * 1024
     };
 
     enum PartitionAddress
@@ -159,7 +160,7 @@ extern "C"
     }
 #endif // PARTITION_CRC32
 
-#ifdef SOC_GD32C103CBT6
+#if defined(SOC_GD32C103CBT6) && defined(__arm__)
 #include "gd32c10x.h"
 
     static inline int check_app_valid(enum ActiveApp app)
@@ -208,16 +209,10 @@ extern "C"
         app_entry();             /* jump to app */
     }
 
-    void reboot(void)
-    {
-        void NVIC_SystemReset(void);
-        NVIC_SystemReset();
-    }
-
-#endif
+#endif /* defined(SOC_GD32C103CBT6) && defined(__arm__) */
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // _PATRITION_H_
+#endif // _PARTITION_H_

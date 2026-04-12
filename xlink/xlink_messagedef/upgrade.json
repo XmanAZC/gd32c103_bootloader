@@ -1,0 +1,95 @@
+{
+  "enums": [
+    {
+      "name": "PartitionType",
+      "values": [
+        { "name": "BOOTLOADER", "value": 0 },
+        { "name": "APP_A", "value": 1 },
+        { "name": "APP_B", "value": 2 }
+      ]
+    }
+  ],
+  "components": [
+    {
+      "name": "UPGRADE",
+      "id": 1,
+      "description": "Firmware upgrade over XLink",
+      "messages": [
+        "GetFirmwareInfo",
+        "FirmwareInfo",
+        "StartFirmwareUpgrade",
+        "StartFirmwareUpgradeResponse",
+        "FirmwareChunk",
+        "FirmwareChunkResponse",
+        "FinalizeFirmwareUpgrade",
+        "FinalizeFirmwareUpgradeResponse",
+        "RestartDevice"
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "name": "GetFirmwareInfo",
+      "fields": [
+        { "name": "required_partition", "type": "PartitionType" }
+      ]
+    },
+    {
+      "name": "FirmwareInfo",
+      "fields": [
+        { "name": "partition_type", "type": "PartitionType" },
+        { "name": "version", "type": "u32" },
+        { "name": "size_bytes", "type": "u32" },
+        { "name": "commit_hash", "type": "u32" },
+        { "name": "compile_timestamp", "type": "u32" },
+        { "name": "current_base_address", "type": "u32" }
+      ]
+    },
+    {
+      "name": "StartFirmwareUpgrade",
+      "fields": [
+        { "name": "start_address", "type": "u32" },
+        { "name": "size_bytes", "type": "u32" },
+        { "name": "chunk_size", "type": "u32" }
+      ]
+    },
+    {
+      "name": "StartFirmwareUpgradeResponse",
+      "fields": [
+        { "name": "accepted", "type": "bool" }
+      ]
+    },
+    {
+      "name": "FirmwareChunk",
+      "fields": [
+        { "name": "offset", "type": "u32" },
+        { "name": "data", "type": "bytes" }
+      ]
+    },
+    {
+      "name": "FirmwareChunkResponse",
+      "fields": [
+        { "name": "offset", "type": "u32" },
+        { "name": "accepted", "type": "bool" }
+      ]
+    },
+    {
+      "name": "FinalizeFirmwareUpgrade",
+      "fields": [
+        { "name": "expected_crc32", "type": "u32" }
+      ]
+    },
+    {
+      "name": "FinalizeFirmwareUpgradeResponse",
+      "fields": [
+        { "name": "success", "type": "bool" }
+      ]
+    },
+    {
+      "name": "RestartDevice",
+      "fields": [
+        { "name": "success", "type": "bool" }
+      ]
+    }
+  ]
+}

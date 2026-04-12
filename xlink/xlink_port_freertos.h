@@ -1,3 +1,4 @@
+#pragma once
 #ifndef XLINK_PORT_FREERTOS_H
 #define XLINK_PORT_FREERTOS_H
 

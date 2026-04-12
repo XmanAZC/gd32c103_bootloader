@@ -21,14 +21,21 @@ set(CMAKE_CXX_COMPILER_WORKS TRUE)
 set(CMAKE_OBJCOPY "${TOOLCHAIN_ROOT}/arm-none-eabi-objcopy")
 set(CMAKE_SIZE "${TOOLCHAIN_ROOT}/arm-none-eabi-size")
 
-set(CMAKE_EXE_LINKER_FLAGS " -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard -ffunction-sections -fdata-sections -Wl,--gc-sections,-Map=bootloader.map,-cref,-u,Reset_Handler -T ${CMAKE_SOURCE_DIR}/link.ld")
+set(CMAKE_EXE_LINKER_FLAGS " -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard -ffunction-sections -fdata-sections -Wl,--gc-sections,-cref,-u,Reset_Handler -T ${CMAKE_SOURCE_DIR}/link.ld")
 
 set(CMAKE_CXX_STANDARD 14)
-project(bootloader C CXX ASM)
+project(gd32c103_ab C CXX ASM)
 include_directories(
 	inc
-	xlink_generator
+    xlink
+    xlink/xlink_generator
 )
+
+function(set_target_map_file target map_name)
+    target_link_options(${target} PRIVATE
+        -Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/${map_name}
+    )
+endfunction()
 
 if(DEFINED ENV{DEBUG})
     add_definitions(-DDEBUG)
@@ -41,12 +48,7 @@ else()
 endif()
 
 set(BOOTLOADER_SOURCES
-    src/upgrade.c
 	src/boot_loader_main.c
-	src/syscall.c
-	src/drv_simple_uart.c
-	src/freertos_mpool.c
-	src/onchip_flash_port.c
 )
 
 set(APP_SOURCES
@@ -85,40 +87,91 @@ link_libraries(
 	freertos_config
 	gd32c103
 )
+if(DEFINED ENV{DEBUG})
+    message("Debug build")
+    add_library(app_objects OBJECT ${APP_SOURCES})
+    add_executable(${CMAKE_PROJECT_NAME}.elf $<TARGET_OBJECTS:app_objects>)
+    set_target_properties(${CMAKE_PROJECT_NAME}.elf PROPERTIES OUTPUT_NAME "${CMAKE_PROJECT_NAME}.elf")
+    set_target_map_file(${CMAKE_PROJECT_NAME}.elf ${CMAKE_PROJECT_NAME}.map)
+    target_link_options(${CMAKE_PROJECT_NAME}.elf PRIVATE
+        -Wl,--defsym,ROM_ORIGIN=0x08000000
+        -Wl,--defsym,ROM_LENGTH=128k
+    )
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME}.elf POST_BUILD
+        COMMAND ${CMAKE_OBJCOPY} -O binary ${CMAKE_PROJECT_NAME}.elf ${CMAKE_PROJECT_NAME}.bin
+        COMMAND ${CMAKE_SIZE} ${CMAKE_PROJECT_NAME}.elf
+    )
+else()
+    message("Release build")
+    find_program(HOST_CXX_COMPILER NAMES g++ c++)
+    if(NOT HOST_CXX_COMPILER)
+        message(FATAL_ERROR "Host C++ compiler not found, required to build app_padding")
+    endif()
 
-add_library(bootloader_objects OBJECT ${BOOTLOADER_SOURCES})
+    add_library(bootloader_objects OBJECT ${BOOTLOADER_SOURCES})
 
-add_executable(bootloader.elf $<TARGET_OBJECTS:bootloader_objects>)
-set_target_properties(bootloader.elf PROPERTIES OUTPUT_NAME "bootloader.elf")
-target_link_options(bootloader.elf PRIVATE
-    -Wl,--defsym,ROM_ORIGIN=0x08000000
-    -Wl,--defsym,ROM_LENGTH=16k
-)
-add_custom_command(TARGET bootloader.elf POST_BUILD
-    COMMAND ${CMAKE_OBJCOPY} -O binary bootloader.elf bootloader.bin
-    COMMAND ${CMAKE_SIZE} bootloader.elf
-)
+    add_executable(bootloader.elf $<TARGET_OBJECTS:bootloader_objects>)
+    set_target_properties(bootloader.elf PROPERTIES OUTPUT_NAME "bootloader.elf")
+    set_target_map_file(bootloader.elf bootloader.map)
+    target_link_options(bootloader.elf PRIVATE
+        -Wl,--defsym,ROM_ORIGIN=0x08000000
+        -Wl,--defsym,ROM_LENGTH=4k
+    )
+    add_custom_command(TARGET bootloader.elf POST_BUILD
+        COMMAND ${CMAKE_OBJCOPY} -O binary bootloader.elf bootloader.bin
+        COMMAND ${CMAKE_SIZE} bootloader.elf
+    )
 
-add_library(app_objects OBJECT ${APP_SOURCES})
+    add_library(app_objects OBJECT ${APP_SOURCES})
 
-add_executable(appa.elf $<TARGET_OBJECTS:app_objects>)
-set_target_properties(appa.elf PROPERTIES OUTPUT_NAME "appa.elf")
-target_link_options(appa.elf PRIVATE
-    -Wl,--defsym,ROM_ORIGIN=0x08005000
-    -Wl,--defsym,ROM_LENGTH=48k
-)
-add_custom_command(TARGET appa.elf POST_BUILD
-    COMMAND ${CMAKE_OBJCOPY} -O binary appa.elf appa.bin
-    COMMAND ${CMAKE_SIZE} appa.elf
-)
+    add_executable(appa.elf $<TARGET_OBJECTS:app_objects>)
+    set_target_properties(appa.elf PROPERTIES OUTPUT_NAME "appa.elf")
+    set_target_map_file(appa.elf appa.map)
+    target_link_options(appa.elf PRIVATE
+        -Wl,--defsym,ROM_ORIGIN=0x08002000
+        -Wl,--defsym,ROM_LENGTH=50k
+    )
+    add_custom_command(TARGET appa.elf POST_BUILD
+        COMMAND ${CMAKE_OBJCOPY} -O binary appa.elf appa.bin
+        COMMAND ${CMAKE_SIZE} appa.elf
+    )
 
-add_executable(appb.elf $<TARGET_OBJECTS:app_objects>)
-set_target_properties(appb.elf PROPERTIES OUTPUT_NAME "appb.elf")
-target_link_options(appb.elf PRIVATE
-    -Wl,--defsym,ROM_ORIGIN=0x08011800
-    -Wl,--defsym,ROM_LENGTH=48k
-)
-add_custom_command(TARGET appb.elf POST_BUILD
-    COMMAND ${CMAKE_OBJCOPY} -O binary appb.elf appb.bin
-    COMMAND ${CMAKE_SIZE} appb.elf
-)
+    add_executable(appb.elf $<TARGET_OBJECTS:app_objects>)
+    set_target_properties(appb.elf PROPERTIES OUTPUT_NAME "appb.elf")
+    set_target_map_file(appb.elf appb.map)
+    target_link_options(appb.elf PRIVATE
+        -Wl,--defsym,ROM_ORIGIN=0x0800F000
+        -Wl,--defsym,ROM_LENGTH=50k
+    )
+    add_custom_command(TARGET appb.elf POST_BUILD
+        COMMAND ${CMAKE_OBJCOPY} -O binary appb.elf appb.bin
+        COMMAND ${CMAKE_SIZE} appb.elf
+    )
+
+    add_custom_command(
+        OUTPUT app_padding_tool
+        COMMAND ${HOST_CXX_COMPILER} ${CMAKE_SOURCE_DIR}/app_padding.cpp -o app_padding_tool
+        DEPENDS ${CMAKE_SOURCE_DIR}/app_padding.cpp ${CMAKE_SOURCE_DIR}/inc/partition.h
+        COMMENT "Building host app_padding tool"
+        VERBATIM
+    )
+
+    add_custom_command(
+        OUTPUT upgrade
+        COMMAND ${HOST_CXX_COMPILER} ${CMAKE_SOURCE_DIR}/upgrade.cpp -o upgrade
+            -I${CMAKE_SOURCE_DIR}/xlink
+            -I${CMAKE_SOURCE_DIR}/xlink/xlink_generator
+            -I${CMAKE_SOURCE_DIR}/inc
+        DEPENDS ${CMAKE_SOURCE_DIR}/upgrade.cpp
+                 ${CMAKE_SOURCE_DIR}/xlink/xlink_generator/xlink_upgrade.h
+                 ${CMAKE_SOURCE_DIR}/xlink/xlink.h
+                 ${CMAKE_SOURCE_DIR}/inc/partition.h
+        COMMENT "Building host upgrade tool"
+        VERBATIM
+    )
+
+    add_custom_target(upgrade_tool ALL DEPENDS upgrade)
+
+    add_custom_target(app_padding ALL DEPENDS app_padding_tool)
+
+endif()

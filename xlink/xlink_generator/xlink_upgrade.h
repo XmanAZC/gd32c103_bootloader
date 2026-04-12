@@ -1,7 +1,8 @@
+#pragma once
 #ifndef XLINK_UPGRADE_H
 #define XLINK_UPGRADE_H
 
-#include "xlink.h"
+#include "../xlink.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -16,6 +17,7 @@
 #define XLINK_UPGRADE_MSG_ID_FIRMWARE_CHUNK_RESPONSE 5
 #define XLINK_UPGRADE_MSG_ID_FINALIZE_FIRMWARE_UPGRADE 6
 #define XLINK_UPGRADE_MSG_ID_FINALIZE_FIRMWARE_UPGRADE_RESPONSE 7
+#define XLINK_UPGRADE_MSG_ID_RESTART_DEVICE 8
 
 typedef uint8_t xlink_partition_type_t;
 #define XLINK_PARTITION_TYPE_BOOTLOADER 0
@@ -146,6 +148,18 @@ static inline int xlink_upgrade_finalize_firmware_upgrade_response_send(xlink_co
     xlink_upgrade_finalize_firmware_upgrade_response_t msg;
     msg.success = success;
     return xlink_send(context, XLINK_COMP_ID_UPGRADE, XLINK_UPGRADE_MSG_ID_FINALIZE_FIRMWARE_UPGRADE_RESPONSE, (const uint8_t *)&msg, (uint8_t)sizeof(msg));
+}
+
+typedef xlink_packed(struct xlink_upgrade_restart_device_t_def
+{
+    bool success;
+}) xlink_upgrade_restart_device_t;
+
+static inline int xlink_upgrade_restart_device_send(xlink_context_p context, bool success)
+{
+    xlink_upgrade_restart_device_t msg;
+    msg.success = success;
+    return xlink_send(context, XLINK_COMP_ID_UPGRADE, XLINK_UPGRADE_MSG_ID_RESTART_DEVICE, (const uint8_t *)&msg, (uint8_t)sizeof(msg));
 }
 
 #endif // XLINK_UPGRADE_H

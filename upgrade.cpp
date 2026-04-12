@@ -11,12 +11,11 @@
 #include <vector>
 #include <signal.h>
 
-#include "xlink_generator/xlink.h"
-#include "xlink_generator/xlink_port_posix.h"
-#include "xlink_generator/xlink_port_stdlib.h"
-#include "xlink_generator/xlink_upgrade.h"
-#include "xlink_generator/xlink_control.h"
-#include "inc/partition.h"
+#include "xlink.h"
+#include "xlink_port_posix.h"
+#include "xlink_port_stdlib.h"
+#include "xlink_upgrade.h"
+#include "partition.h"
 
 using namespace std;
 
@@ -92,7 +91,7 @@ class upgrade_partition
 {
 public:
     upgrade_partition(xlink_partition_type_t type, xlink_context_p context, int fd)
-        : partition_type(type), ctx(context)
+        : ctx(context), partition_type(type)
     {
         switch (partition_type)
         {
@@ -114,7 +113,8 @@ public:
         default:
             start_address = 0;
             size_bytes = 0;
-            break;
+            printf("Unknown partition type: %u\n", partition_type);
+            return;
         }
         int ret = lseek(fd, start_address - PARTITION_ADDRESS_BOOTLOADER, SEEK_SET);
         if (ret < 0)
@@ -176,11 +176,11 @@ public:
     }
 
 private:
-    xlink_partition_type_t partition_type;
-    string partition_name;
     uint32_t start_address;
     uint32_t size_bytes;
+    string partition_name;
     xlink_context_p ctx;
+    xlink_partition_type_t partition_type;
     vector<uint8_t> firmware_data;
 
     const size_t chunk_size = 200;
@@ -412,8 +412,6 @@ int main(int argc, char *const *argv)
 
     xlink_upgrade_firmware_info_t app_a_info;
     xlink_upgrade_firmware_info_t app_b_info;
-    xlink_upgrade_firmware_info_t bootloader_info;
-    ret |= get_mcu_firmware_version(ctx, XLINK_PARTITION_TYPE_BOOTLOADER, &bootloader_info);
     ret |= get_mcu_firmware_version(ctx, XLINK_PARTITION_TYPE_APP_A, &app_a_info);
     ret |= get_mcu_firmware_version(ctx, XLINK_PARTITION_TYPE_APP_B, &app_b_info);
     if (ret != 0)
@@ -421,13 +419,21 @@ int main(int argc, char *const *argv)
         printf("Failed to get firmware version\n");
         goto __free_ctx;
     }
+    target_partition = app_a_info.current_base_address == PARTITION_ADDRESS_APP_A
+                           ? XLINK_PARTITION_TYPE_APP_B
+                           : XLINK_PARTITION_TYPE_APP_A;
+    if (target_partition == XLINK_PARTITION_TYPE_APP_A)
+    {
+        printf("Current active partition: APP_B, will upgrade APP_A\n");
+    }
+    else
+    {
+        printf("Current active partition: APP_A, will upgrade APP_B\n");
+    }
     if (is_show_info)
     {
         goto __free_ctx;
     }
-    target_partition = app_a_info.current_base_address == PARTITION_ADDRESS_APP_A
-                           ? XLINK_PARTITION_TYPE_APP_B
-                           : XLINK_PARTITION_TYPE_APP_A;
     firmware_fd = open(file_path->c_str(), O_RDONLY);
     if (firmware_fd < 0)
     {
@@ -462,6 +468,12 @@ int main(int argc, char *const *argv)
 
     printf("Firmware upgrade completed successfully\n");
 
+    printf("Reset the device to boot into the new firmware\n");
+
+    xlink_upgrade_restart_device_send(ctx, true);
+
+    tcflush(serial_fd, TCIOFLUSH);
+
 __close_frimware_fd:
     close(firmware_fd);
 __free_ctx:
@@ -489,10 +501,14 @@ static int get_mcu_firmware_version(xlink_context_p ctx, xlink_partition_type_t 
                                      const xlink_upgrade_firmware_info_t *info = (const xlink_upgrade_firmware_info_t *)payload;
                                         printf("\n==============================\n");
                                         printf("Partition Type: %s\n",info->partition_type < sizeof(partition_str)/sizeof(partition_str[0]) ? partition_str[info->partition_type].c_str() : "UNKNOWN");
-                                        printf("Firmware Version: %u\n", info->version);
+                                        printf("Firmware Version: v%d.%d.%d\n", (info->version >> 16) & 0xFF, (info->version >> 8) & 0xFF, info->version & 0xFF);
                                         printf("Firmware Size: %u bytes\n", info->size_bytes);
-                                        printf("Commit Hash: 0x%08X\n", info->commit_hash);
-                                        printf("Compile Timestamp: %u\n", info->compile_timestamp);
+                                        printf("Commit Hash: %x\n", info->commit_hash);
+                                        time_t compile_time = (time_t)info->compile_timestamp;
+                                        struct tm *timeinfo = localtime(&compile_time);
+                                        char time_str[32];
+                                        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", timeinfo);
+                                        printf("Compile Timestamp: %s\n", time_str);
                                         printf("Current Base Address: 0x%08X\n", info->current_base_address);
                                         printf("==============================\n");
                                         if (user_data != nullptr)

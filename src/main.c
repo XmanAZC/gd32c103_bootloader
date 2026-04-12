@@ -10,7 +10,6 @@
 #include "drv_simple_uart.h"
 #include "freertos_mpool.h"
 #include "xlink_upgrade.h"
-#include "xlink_control.h"
 #include "xlink_port_freertos.h"
 #include "onchip_flash_port.h"
 
@@ -18,28 +17,37 @@ static void live_led_task(void *parameters) __attribute__((noreturn));
 
 static void xlinkTask(void *parameters) __attribute__((noreturn));
 
-void entry(void)
+static void initTask(void *parameters)
 {
-    static StaticTask_t xlinkTaskTCB;
-    static StackType_t xlinkTaskStack[1024];
-    (void)xTaskCreateStatic(xlinkTask,
-                            "xlink",
-                            1024,
-                            NULL,
-                            configMAX_PRIORITIES - 2U,
-                            &(xlinkTaskStack[0]),
-                            &(xlinkTaskTCB));
+    (void)parameters;
 
-    static StaticTask_t live_led_TCB;
-    static StackType_t live_led_Stack[configMINIMAL_STACK_SIZE];
+    uart_init();
 
-    (void)xTaskCreateStatic(live_led_task,
-                            "live_led",
-                            configMINIMAL_STACK_SIZE,
-                            NULL,
-                            configMAX_PRIORITIES - 3U,
-                            &(live_led_Stack[0]),
-                            &(live_led_TCB));
+    (void)xTaskCreate(xlinkTask,
+                      "xlink",
+                      configMINIMAL_STACK_SIZE * 4,
+                      NULL,
+                      tskIDLE_PRIORITY + 2U,
+                      NULL);
+
+    (void)xTaskCreate(live_led_task,
+                      "live_led",
+                      configMINIMAL_STACK_SIZE,
+                      NULL,
+                      tskIDLE_PRIORITY + 1U,
+                      NULL);
+
+    vTaskDelete(NULL);
+}
+
+void main(void)
+{
+    (void)xTaskCreate(initTask,
+                      "init",
+                      configMINIMAL_STACK_SIZE * 4,
+                      NULL,
+                      configMAX_PRIORITIES,
+                      NULL);
 
     /* Start the scheduler. */
     vTaskStartScheduler();
@@ -72,15 +80,12 @@ static xlink_context_p xlink_ctx = NULL;
 static void xlinkTask(void *parameters)
 {
     int upgrade_init(xlink_context_p context);
-    /* Unused parameters. */
     (void)parameters;
-    uart_init();
     void *uart_handle = gd32_uart_get_handle("uart1");
-    SemaphoreHandle_t uart_rx_semaphore = xSemaphoreCreateCounting(0xffffffff, 0);
+    SemaphoreHandle_t uart_rx_semaphore = xSemaphoreCreateBinary();
     if (uart_handle == NULL)
     {
-        for (;;)
-            vTaskDelay(WINT_MAX);
+        vTaskDelete(NULL);
     }
     static xlink_port_api_t xlink_port = {
         .malloc_fn = xlink_freertos_malloc,
@@ -120,27 +125,24 @@ static void xlinkTask(void *parameters)
 
 static void live_led_task(void *parameters)
 {
-    /* Unused parameters. */
     (void)parameters;
     rcu_periph_clock_enable(RCU_GPIOB);
-    gpio_bit_set(GPIOB, GPIO_PIN_7); // Set PB7 high
+    gpio_bit_set(GPIOB, GPIO_PIN_7);
     gpio_init(GPIOB, GPIO_MODE_OUT_PP, GPIO_OSPEED_50MHZ, GPIO_PIN_7);
     int led_state = 1;
 
     for (;;)
     {
-        /* Example Task Code */
         led_state = !led_state;
         if (led_state)
         {
-            gpio_bit_set(GPIOB, GPIO_PIN_7); // Turn LED on
+            gpio_bit_set(GPIOB, GPIO_PIN_7);
         }
         else
         {
-            gpio_bit_reset(GPIOB, GPIO_PIN_7); // Turn LED off
+            gpio_bit_reset(GPIOB, GPIO_PIN_7);
         }
-        xlink_control_led_state_send(xlink_ctx, led_state);
-        vTaskDelay(pdMS_TO_TICKS(100)); /* delay 1000 ms */
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
