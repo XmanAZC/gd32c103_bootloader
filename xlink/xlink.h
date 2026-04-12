@@ -1,3 +1,4 @@
+#pragma once
 #ifndef XLINK_H
 #define XLINK_H
 
@@ -463,7 +464,6 @@ static inline int xlink_send(xlink_context_p context,
     crc = xlink_crc16_with_init(&msg->len, 3, crc);
     _memcpy_and_crc16(msg->payload, payload, payload_len, crc);
 
-    uint16_t total_len = (uint16_t)(XLINK_LENGTH_OF_HEADER + payload_len + XLINK_LENGTH_OF_CRC);
     return context->port->transport_send_fn(context->transport_handle, frame);
 }
 

@@ -16,7 +16,7 @@ static int GetFirmwareInfo_cb(uint8_t comp_id,
 {
 #define BOOTLOADER_VERSION 0x00010001
 #define BOOTLOADER_COMMIT_HASH 0x12345678
-#define BOOTLOADER_COMPILE_TIMESTAMP 0x644B5A00
+#define BOOTLOADER_COMPILE_TIMESTAMP 0x12345678
     extern uint32_t __gVectors[];
     xlink_upgrade_get_firmware_info_t *msg = (xlink_upgrade_get_firmware_info_t *)payload;
     xlink_partition_type_t partition_type;
@@ -113,6 +113,16 @@ static int FinalizeFirmwareUpgrade_cb(uint8_t comp_id,
     return 0;
 }
 
+static int RestartDevice_cb(uint8_t comp_id,
+                            uint8_t msg_id,
+                            const uint8_t *payload,
+                            uint8_t payload_len,
+                            void *user_data)
+{
+    NVIC_SystemReset();
+    return 0;
+}
+
 int upgrade_init(xlink_context_p context)
 {
 
@@ -136,6 +146,12 @@ int upgrade_init(xlink_context_p context)
                                XLINK_COMP_ID_UPGRADE,
                                XLINK_UPGRADE_MSG_ID_FINALIZE_FIRMWARE_UPGRADE,
                                FinalizeFirmwareUpgrade_cb,
+
+                               context);
+    xlink_register_msg_handler(context,
+                               XLINK_COMP_ID_UPGRADE,
+                               XLINK_UPGRADE_MSG_ID_RESTART_DEVICE,
+                               RestartDevice_cb,
                                context);
 
     return 0;

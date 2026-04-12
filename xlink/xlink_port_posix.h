@@ -1,3 +1,4 @@
+#pragma once
 #ifndef XLINK_PORT_POSIX_H
 #define XLINK_PORT_POSIX_H
 
